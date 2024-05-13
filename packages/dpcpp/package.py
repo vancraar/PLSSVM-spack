@@ -30,13 +30,13 @@ class Dpcpp(CMakePackage):
     requires("%gcc", msg="DPC++ builds only with GCC")
 
     variant("cuda", default=False, description="switch from OpenCL to CUDA")
-    variant("hip", default=False, description="switch from OpenCL to HIP")
+    variant("rocm", default=False, description="switch from OpenCL to rocm")
     variant(
-        "hip-platform",
+        "rocm-platform",
         default="AMD",
         values=("AMD", "NVIDIA"),
         multi=False,
-        description="choose HIP backend",
+        description="choose rocm backend",
     )
     variant("esimd-emulator", default=False, description="build with ESIMD emulation support")
     variant("assertions", default=False, description="build with assertions")
@@ -58,18 +58,19 @@ class Dpcpp(CMakePackage):
         default="none",
         description="Add external projects to build. Add as a comma seperated list.",
     )
+    variant("openmp", default=False, description="TODO")
 
     depends_on("cmake@3.16.2:", type="build")
     depends_on("ninja@1.10.0:", type="build")
 
     depends_on("cuda@10.2.0:", when="+cuda")
 
-    conflicts("~lld", when="+hip hip-platform=AMD", msg="lld is needed for HIP plugin on AMD")
+    conflicts("~lld", when="+rocm rocm-platform=AMD", msg="lld is needed for rocm plugin on AMD")
     conflicts("~lld", when=(sys.platform == "windows"), msg="lld is needed on Windows")
 
-    # NOTE: AMD HIP needs to be tested; it will be done in the next update
+    # NOTE: AMD rocm needs to be tested; it will be done in the next update
     # depends_on('cuda@10.2.0:10.2.999', when='rocm-platform=NVIDIA', type='build')
-    # depends_on('hip@4.0.0:', when='+rocm', type='build')
+    # depends_on('rocm@4.0.0:', when='+rocm', type='build')
 
     root_cmakelists_dir = "llvm"
     build_targets = ["deploy-sycl-toolchain"]
@@ -94,7 +95,7 @@ class Dpcpp(CMakePackage):
         llvm_enable_projects = "clang;" + llvm_external_projects
         libclc_targets_to_build = ""
         libclc_gen_remangled_variants = "OFF"
-        sycl_build_pi_hip_platform = self.spec.variants["hip-platform"].value
+        sycl_build_pi_rocm_platform = self.spec.variants["rocm-platform"].value
         sycl_enabled_plugins = "opencl"
         llvm_targets_to_build = get_llvm_targets_to_build(self.spec.target.family)
 
@@ -102,11 +103,11 @@ class Dpcpp(CMakePackage):
             sycl_enabled_plugins += ";level_zero"
 
         is_cuda = "+cuda" in self.spec
-        is_hip = "+hip" in self.spec
+        is_rocm = "+rocm" in self.spec
 
         if "+esimd-emulator" in self.spec:
             sycl_enabled_plugins += ";esimd_emulator"
-        if is_cuda or is_hip:
+        if is_cuda or is_rocm:
             llvm_enable_projects += ";libclc"
 
         if is_cuda:
@@ -115,11 +116,11 @@ class Dpcpp(CMakePackage):
             libclc_gen_remangled_variants = "ON"
             sycl_enabled_plugins += ";cuda"
 
-        if is_hip:
-            if sycl_build_pi_hip_platform == "AMD":
+        if is_rocm:
+            if sycl_build_pi_rocm_platform == "AMD":
                 llvm_targets_to_build += ";AMDGPU"
                 libclc_targets_to_build += libclc_amd_target_names
-            elif sycl_build_pi_hip_platform and not is_cuda:
+            elif sycl_build_pi_rocm_platform and not is_cuda:
                 llvm_targets_to_build += ";NVPTX"
                 libclc_targets_to_build += libclc_nvidia_target_names
             libclc_gen_remangled_variants = "ON"
@@ -144,7 +145,7 @@ class Dpcpp(CMakePackage):
             self.define("LLVM_ENABLE_PROJECTS", llvm_enable_projects),
             self.define("LIBCLC_TARGETS_TO_BUILD", libclc_targets_to_build),
             self.define("LIBCLC_GENERATE_REMANGLED_VARIANTS", libclc_gen_remangled_variants),
-            self.define_from_variant("SYCL_BUILD_PI_HIP_PLATFORM", "hip-platform"),
+            self.define_from_variant("SYCL_BUILD_PI_HIP_PLATFORM", "rocm-platform"),
             self.define("LLVM_BUILD_TOOLS", "ON"),
             self.define_from_variant("SYCL_ENABLE_WERROR", "werror"),
             self.define("SYCL_INCLUDE_TESTS", "ON"),
@@ -159,7 +160,7 @@ class Dpcpp(CMakePackage):
             self.define_from_variant("EXTRA_SECURITY_FLAGS", "security_flags"),
         ]
 
-        if is_cuda or (is_hip and sycl_build_pi_hip_platform == "NVIDIA"):
+        if is_cuda or (is_rocm and sycl_build_pi_rocm_platform == "NVIDIA"):
             args.append(self.define("CUDA_TOOLKIT_ROOT_DIR", self.spec["cuda"].prefix))
 
         if self.compiler.name == "gcc":

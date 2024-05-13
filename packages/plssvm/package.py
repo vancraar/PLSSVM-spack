@@ -47,7 +47,7 @@ def default_cuda_arch(possible_archs):
     except:
         pass
 
-    return "none" if not gpus else list(set(gpus))
+    return ["none"] if not gpus else list(set(gpus))
 
 def amd_arch():
     from pathlib import Path
@@ -70,7 +70,7 @@ def amd_arch():
                     gpus.append(target)
     except:
         pass
-    return "none" if not gpus else ",".join(gpus)
+    return ["none"] if not gpus else list(set(gpus))
 
 plssvm_unsupported_cuda_archs=[
     "10", "11", "12", "13",
@@ -78,7 +78,7 @@ plssvm_unsupported_cuda_archs=[
     "30", "32", "35", "37"
 ]
 
-class Plssvm(CMakePackage,CudaPackage, ROCmPackage):
+class Plssvm(CMakePackage,CudaPackage,  ):
     """Implementation of a parallel least squares support vector machine using multiple backends for different GPU vendors. """
 
     # FIXME: Add a proper url for your package's homepage here.
@@ -96,6 +96,7 @@ class Plssvm(CMakePackage,CudaPackage, ROCmPackage):
     version("develop", branch="test")
 
 
+    variant("hip", default=False, description="Enable HIP support")
 
 
     variant("openmp", default=True, description="Enable OpenMP support")
@@ -114,12 +115,12 @@ class Plssvm(CMakePackage,CudaPackage, ROCmPackage):
 
     variant(
         "amdgpu_target",
-        description="AMD GPU architecture",
-        # values=ROCmPackage.amdgpu_targets,
-        default=amd_arch(),
+        description="HIP GPU architecture",
+        values=ROCmPackage.amdgpu_targets,
+        default=amd_arch()[0],
         multi=True,
         sticky=True,
-        when="+rocm",
+        when="+hip",
     )
 
     variant(
@@ -131,17 +132,57 @@ class Plssvm(CMakePackage,CudaPackage, ROCmPackage):
         sticky=True,
         when="+opencl",
     )
+    variant(
+        "cuda_arch",
+        description="CUDA architecture",
+        values=supported_cuda_archs+["none"],
+        default=default_cuda_arch(supported_cuda_archs)[0],
+        multi=True,
+        sticky=True,
+        when="+icpx",
+    )
+
+    variant(
+        "cuda_arch",
+        description="CUDA architecture",
+        values=supported_cuda_archs+["none"],
+        default=default_cuda_arch(supported_cuda_archs)[0],
+        multi=True,
+        sticky=True,
+        when="+hip",
+    )
+
+    variant(
+        "cuda_arch",
+        description="CUDA architecture",
+        values=supported_cuda_archs+["none"],
+        default=default_cuda_arch(supported_cuda_archs)[0],
+        multi=True,
+        sticky=True,
+        when="+adaptivecpp",
+    )
+
 
     variant(
         "amdgpu_target",
-        description="AMD GPU architecture",
-        # values=ROCmPackage.amdgpu_targets,
-        default=amd_arch(),
+        description="HIP GPU architecture",
+        values=list(ROCmPackage.amdgpu_targets)+list(["none"]),
+        default=amd_arch()[0],
         multi=True,
         sticky=True,
         when="+opencl",
+
     )
 
+    variant(
+        "amdgpu_target",
+        description="HIP GPU architecture",
+        values=list(ROCmPackage.amdgpu_targets)+list(["none"]),
+        default=amd_arch()[0],
+        multi=True,
+        sticky=True,
+        when="+icpx",
+    )
 
 
 
@@ -168,24 +209,55 @@ class Plssvm(CMakePackage,CudaPackage, ROCmPackage):
 
     variant("opencl", default=False, description="Enable OpenCL support")
 
-    variant("hipsycl", default=False, description="Enable HIP SYCL support")
+    variant("adaptivecpp", default=False, description="Enable AdaptiveCpp SYCL integration")
+    variant("adaptivecpp_SSCP", when="+dpcpp", default=True, description="Use AdaptiveCpp's new SSCP compilation flow.")
 
-    variant("sycl", default=False, description="Enable SYCL support")
-    conflicts("+sycl", msg="SYCL support is not yet implemented")
+    variant("dpcpp", default=False, description="Enable DPC++ SYCL integration.")
+    variant("dpcpp_aot", when="+dpcpp", default=True, description="Enable Ahead-of-Time (AOT) compilation for the specified target platforms.")
+    variant("dpcpp_level_zero", when="+dpcpp", default=True, description="Use DPC++'s Level-Zero backend instead of its OpenCL backend (only available if a CPU or Intel GPU is targeted).")
 
+    variant("icpx", default=False, description="Enable Intel SYCL integration")
+
+
+
+    default_sycl_target_arch=default_cuda_arch(supported_cuda_archs)[0]
+    # if "none" in default_sycl_target_arch:
+    #     default_sycl_target_arch=amd_arch()[0]
+
+
+    variant(
+        "sycl_target_arch", default=default_sycl_target_arch,
+        values=(("none", "intel", "nvidia") + CudaPackage.cuda_arch_values + ROCmPackage.amdgpu_targets),
+        when="+dpcpp",
+        description=("GPU target for SYCL. Can be generic with \'intel\' and \'nvidia\', or target a "
+                     "specific GPU arch (required for AMD GPUs, optional for NVIDIA GPUs, unavaible "
+                     "for Intel GPUs - just select intel for those)."),
+    )
+
+    variant(
+        "sycl_target_arch", default=default_sycl_target_arch,
+        values=(("none", "intel", "nvidia") + CudaPackage.cuda_arch_values + ROCmPackage.amdgpu_targets),
+        when="+adaptivecpp",
+        description=("GPU target for SYCL. Can be generic with \'intel\' and \'nvidia\', or target a "
+                     "specific GPU arch (required for AMD GPUs, optional for NVIDIA GPUs, unavaible "
+                     "for Intel GPUs - just select intel for those)."),
+    )
+
+
+     # TODO: variant cpu_target
 
     # FIXME: Add dependencies if required.
 
-    depends_on("fmt@10.2.1:")
+    depends_on("fmt@9.1.0")
     depends_on("cxxopts@3.1.1:")
     depends_on("igor@master")
     depends_on("fast-float@3.10.0")
     depends_on("googletest@1.14.0:", when="+test")
 
-    depends_on("cmake@3.21:", type="build")
+    depends_on("cmake@3.23:", type="build")
     depends_on("opencl", when="+opencl")
 
-    depends_on("pocl", when="+opencl")
+    # depends_on("pocl", when="+opencl") # TODO fix
 
 
     depends_on("python@3:", when="+python")
@@ -197,29 +269,42 @@ class Plssvm(CMakePackage,CudaPackage, ROCmPackage):
     depends_on("py-humanize", when="+test_file")
     depends_on("py-numpy", when="+test_file")
 
-    depends_on("hipsycl@23.10.0:", when="+hipsycl~cuda~rocm")
-    depends_on("hipsycl@23.10.0:+cuda", when="+hipsycl+cuda~rocm")
+    depends_on("hip@4.5.0:", when="+hip")
+    # if not "amdgpu_target=none" in self.variant:
 
-    variant("dpcpp", default=False, description="Enable SYCL integration.")
-    variant(
-        "sycl_target_arch", default="none",
-        values=(("none", "intel", "nvidia") + CudaPackage.cuda_arch_values + ROCmPackage.amdgpu_targets),
-        description=("GPU target for SYCL. Can be generic with \'intel\' and \'nvidia\', or target a "
-                     "specific GPU arch (required for AMD GPUs, optional for NVIDIA GPUs, unavaible "
-                     "for Intel GPUs - just select intel for those)."),
-    )
+
+    depends_on("cuda", when="+cuda")
+    depends_on("adaptivecpp", when="+adaptivecpp")
+    depends_on("llvm~gold", when="+adaptivecpp")
+
+    depends_on("intel-oneapi-compilers", when="+icpx")
+    depends_on("intel-oneapi-tbb", when="+icpx")
+
+
+
+
+
+    # requires(
+    #     "%gcc@9:", "%clang@17:",
+    #     policy="one_of"
+    #     msg="PLSSVM builds only with GCC or Clang"
+    # )
+
+
+
+    conflicts("+icpx", when="+dpcpp", msg="Intel SYCL integration conflicts DPC++ SYCL integration.")
 
 
     # Depend on compiler that is being used for sycl
     # This ensures that, for example, dpcpp supports the cuda backend
     # when a NVIDIA device is being used
-    # depends_on("dpcpp@2023-03:", when="+dpcpp ")
-    depends_on("dpcpp@2023-03: +cuda", when="+dpcpp")
+    depends_on("dpcpp@2023-03:", when="+dpcpp ")
+    depends_on("dpcpp@2023-03+openmp", when="+dpcpp")
     for cuda_arch in CudaPackage.cuda_arch_values:
-        depends_on("dpcpp@2023-03: +cuda",
+        depends_on("dpcpp@2023-03: +openmp +cuda",
                    when="+dpcpp sycl_target_arch={0}".format(cuda_arch))
     for amdgpu_arch in ROCmPackage.amdgpu_targets:
-        depends_on("dpcpp@2023-03: +hip hip-platform=AMD",
+        depends_on("dpcpp@2023-03:+openmp +rocm rocm-platform=AMD",
                    when="+dpcpp sycl_target_arch={0}".format(amdgpu_arch))
 
 
@@ -232,13 +317,19 @@ class Plssvm(CMakePackage,CudaPackage, ROCmPackage):
                    "\'intel\' in case a specific architecture is not targeted."))
 
 
-
-    # parallel = False
-
     @run_before('configure')
     def check_cuda_arch(self, arch):
         if not "cuda_arch=none" in self.spec:
             depends_on("cuda", when="+opencl")
+            depends_on("adaptivecpp+cuda", when="+adaptivecpp")
+            depends_on("oneapi-plugin-nvidia", when="+icpx")
+
+    @run_before('configure')
+    def check_amd_arch(self, arch):
+        if not "amdgpu_target=none" in self.spec:
+            depends_on("rocm-opencl", when="+opencl")
+            depends_on(adaptivecpp+rocm, when="+adaptivecpp")
+            depends_on("oneapi-plugin-amd", when="+icpx")
 
     def setup_run_environment(self, env):
         env.prepend_path('PYTHONPATH', self.prefix + '/install/lib/')
@@ -256,7 +347,7 @@ class Plssvm(CMakePackage,CudaPackage, ROCmPackage):
         args += [self.define_from_variant("PLSSVM_ENABLE_CUDA_BACKEND", "cuda")]
 
 
-        args += [self.define_from_variant("PLSSVM_ENABLE_HIP_BACKEND", "rocm")]
+        args += [self.define_from_variant("PLSSVM_ENABLE_HIP_BACKEND", "hip")]
 
 
 
@@ -297,33 +388,62 @@ class Plssvm(CMakePackage,CudaPackage, ROCmPackage):
 
         args += [self.define_from_variant("PLSSVM_ENABLE_OPENCL_BACKEND", "opencl")]
 
-        args += [self.define_from_variant("PLSSVM_ENABLE_SYCL_BACKEND", "dpcpp")]
+        # args += [self.define_from_variant("PLSSVM_ENABLE_SYCL_BACKEND", "dpcpp")]
+        if "+adaptivecpp" in self.spec or "+dpcpp" in self.spec or "+icpx" in self.spec:
+            args += [self.define("PLSSVM_ENABLE_SYCL_BACKEND", "ON")]
 
-        args += [self.define_from_variant("PLSSVM_ENABLE_HIPSYCL_BACKEND", "hipsycl")]
+
+        if "+adaptivecpp" in self.spec:
+            args += [self.define_from_variant("PLSSVM_ENABLE_SYCL_ADAPTIVECPP_BACKEND", "adaptivecpp")]
+            args += [self.define_from_variant("PLSSVM_SYCL_BACKEND_ADAPTIVECPP_USE_GENERIC_SSCP", "adaptivecpp_SSCP")]
+            args += [self.define("PLSSVM_SYCL_ADAPTIVECPP_INCLUDE_DIR", "{0}/include".format(self.spec["adaptivecpp"].prefix))]# TODO
+            args += [self.define("PLSSVM_SYCL_BACKEND_PREFERRED_IMPLEMENTATION", "adaptivecpp")]
+
+        if "+dpcpp" in self.spec or "+icpx" in self.spec:
+            args += [self.define("PLSSVM_ENABLE_SYCL_DPCPP_BACKEND", "ON")]
+        if "+dpcpp" in self.spec:
+            args += [self.define_from_variant("PLSSVM_SYCL_BACKEND_DPCPP_ENABLE_AOT", "dpcpp_aot")]
+            args += [self.define_from_variant("PLSSVM_SYCL_BACKEND_DPCPP_USE_LEVEL_ZERO", "dpcpp_level_zero")]
+            args += [self.define("PLSSVM_SYCL_DPCPP_INCLUDE_DIR", "{0}/include".format(self.spec["dpcpp"].prefix))]
+        if "+icpx" in self.spec:
+            args += [self.define("PLSSVM_SYCL_DPCPP_INCLUDE_DIR", "{0}/include".format(self.spec["intel-oneapi-compilers"].prefix))]
 
 
 
         target_arch = []
-        print(self.spec.variants["openmp"].value)
-        print(type(self.spec.variants))
-        if "cuda_arch" in self.spec.variants:
+        if "cuda_arch" in self.spec.variants and  not "none" in self.spec.variants["cuda_arch"].value:
             target_arch += ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)]
         if "amdgpu_target" in self.spec.variants and not "none" in self.spec.variants["amdgpu_target"].value:
             target_arch += ["amd:" + ",".join(self.spec.variants["amdgpu_target"].value)]
-        if self.spec.variants["openmp"].value:
-            target_arch += ["cpu"]
-            print("CPU")
 
-        args += [self.define("PLSSVM_TARGET_PLATFORMS", ";".join(target_arch))]
+        if "+openmp" in self.spec:
+            args += [self.define("PLSSVM_OPENMP_TARGET_PLATFORMS", "cpu")]
+        if "+opencl" in self.spec:
+            args += [self.define("PLSSVM_OPENCL_TARGET_PLATFORMS", ";".join(target_arch))] # TODO: add cpu if pocl is working
+        if "+cuda" in self.spec:
+            args += [self.define("PLSSVM_CUDA_TARGET_PLATFORMS", ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)])]
+        if "+hip" in self.spec:
+            args += [self.define("PLSSVM_HIP_TARGET_PLATFORMS", ["amd:" + ",".join(self.spec.variants["amdgpu_target"].value)])]
+        if "+adaptivecpp" in self.spec:
+            args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", ";".join(target_arch))]
 
 
-        # SYCL support requires compiling with dpcpp clang
+
+
+        # SYCL support requires compiling with icpx clang
+        if "+icpx" in self.spec:
+            # Set compiler to icpx
+            args += [self.define("CMAKE_CXX_COMPILER", "{0}/compiler/latest/bin/icpx".format(self.spec["intel-oneapi-compilers"].prefix))]
+            # args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", "cpu:avx512" +";".join(target_arch))]
+            args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", ";".join(target_arch))]
+
         if "+dpcpp" in self.spec:
             # Set compiler to dpcpp
             args += [self.define("CMAKE_CXX_COMPILER",
                                  "{0}/bin/clang++".format(self.spec["dpcpp"].prefix))]
 
 
+        # args += [self.define("PLSSVM_TARGET_PLATFORMS", "cpu;nvidia:sm_80")]
 
         return args
 
