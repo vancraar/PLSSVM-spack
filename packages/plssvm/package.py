@@ -218,6 +218,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
     variant("icpx", default=False, description="Enable Intel SYCL integration")
 
+    variant("language_bindings", default=False, description="Enable language bindings") # TODO: dependancies
+
 
 
     default_sycl_target_arch=default_cuda_arch(supported_cuda_archs)[0]
