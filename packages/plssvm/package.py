@@ -183,6 +183,15 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         sticky=True,
         when="+icpx",
     )
+    variant(
+        "amdgpu_target",
+        description="HIP GPU architecture",
+        values=list(ROCmPackage.amdgpu_targets)+list(["none"]),
+        default=amd_arch()[0],
+        multi=True,
+        sticky=True,
+        when="+adaptivecpp",
+    )
 
 
 
