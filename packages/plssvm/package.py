@@ -286,7 +286,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
     depends_on("cuda", when="+cuda")
     depends_on("adaptivecpp", when="+adaptivecpp")
-    depends_on("llvm~gold", when="+adaptivecpp")
+    depends_on("llvm", when="+adaptivecpp")
 
     depends_on("intel-oneapi-compilers", when="+icpx")
     depends_on("intel-oneapi-tbb", when="+icpx")
