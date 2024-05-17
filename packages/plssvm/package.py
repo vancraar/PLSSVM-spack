@@ -204,6 +204,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     variant("test_file_num_features", default=2000, values=int, when="+test_file", description="Number of features in the test file")
     variant("test_file_num_classes", default=5, values=int, when="+test_file", description="Number of different labels in the test file")
     variant("documentation", default=False, description="Enable documentation")
+    variant("fast-math", default=True, description="Enable fast math optimizations")
+
 
     variant("asserts", default=False, description="Enable asserts") # TODO: default enable with debug mode
     variant("real_type", default="double", values=("float","double"), multi=False, description="Real type to use for the SVM")
@@ -304,6 +306,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
 
     conflicts("+icpx", when="+dpcpp", msg="Intel SYCL integration conflicts DPC++ SYCL integration.")
+    conflicts("build_type=Debug", when="+fast-math", msg="Fast math optimizations are not allowed in debug mode.")
 
 
     # Depend on compiler that is being used for sycl
