@@ -221,7 +221,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     variant("opencl", default=False, description="Enable OpenCL support")
 
     variant("adaptivecpp", default=False, description="Enable AdaptiveCpp SYCL integration")
-    variant("adaptivecpp_SSCP", when="+dpcpp", default=True, description="Use AdaptiveCpp's new SSCP compilation flow.")
+    variant("adaptivecpp_SSCP", when="+adaptivecpp", default=True, description="Use AdaptiveCpp's new SSCP compilation flow.")
 
     variant("dpcpp", default=False, description="Enable DPC++ SYCL integration.")
     variant("dpcpp_aot", when="+dpcpp", default=True, description="Enable Ahead-of-Time (AOT) compilation for the specified target platforms.")
@@ -317,7 +317,13 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     for cuda_arch in CudaPackage.cuda_arch_values:
         depends_on("dpcpp@2023-03: +openmp +cuda",
                    when="+dpcpp sycl_target_arch={0}".format(cuda_arch))
+        depends_on("cuda", when="+opencl cuda_arch={0}".format(cuda_arch))
+        depends_on("adaptivecpp+cuda", when="+adaptivecpp cuda_arch={0}".format(cuda_arch))
+        depends_on("oneapi-plugin-nvidia", when="+icpx cuda_arch={0}".format(cuda_arch))
     for amdgpu_arch in ROCmPackage.amdgpu_targets:
+        depends_on("rocm-opencl", when="+opencl amdgpu_target={0}".format(amdgpu_arch))
+        depends_on("adaptivecpp+rocm", when="+adaptivecpp amdgpu_target={0}".format(amdgpu_arch))
+        depends_on("oneapi-plugin-amd", when="+icpx amdgpu_target={0}".format(amdgpu_arch))
         depends_on("dpcpp@2023-03:+openmp +rocm rocm-platform=AMD",
                    when="+dpcpp sycl_target_arch={0}".format(amdgpu_arch))
 
@@ -331,19 +337,6 @@ class Plssvm(CMakePackage,CudaPackage,  ):
                    "\'intel\' in case a specific architecture is not targeted."))
 
 
-    @run_before('configure')
-    def check_cuda_arch(self, arch):
-        if not "cuda_arch=none" in self.spec:
-            depends_on("cuda", when="+opencl")
-            depends_on("adaptivecpp+cuda", when="+adaptivecpp")
-            depends_on("oneapi-plugin-nvidia", when="+icpx")
-
-    @run_before('configure')
-    def check_amd_arch(self, arch):
-        if not "amdgpu_target=none" in self.spec:
-            depends_on("rocm-opencl", when="+opencl")
-            depends_on(adaptivecpp+rocm, when="+adaptivecpp")
-            depends_on("oneapi-plugin-amd", when="+icpx")
 
     def setup_run_environment(self, env):
         env.prepend_path('PYTHONPATH', self.prefix + '/install/lib/')
