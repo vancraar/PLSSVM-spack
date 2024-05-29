@@ -44,7 +44,7 @@ class OneapiPluginNvidia(Package):
         url = "https://developer.codeplay.com/api/v1/products/download?product=oneapi&variant=nvidia&version={0}&filters[]={1}&filters[]=linux"
         return url.format(version.up_to(3), str(version).split("-")[1])
 
-    version("2024.1.0-12.0", sha256="b045a6c108d4699a3bb2a6e487e85d393decd6334e93bbb715cb770617287119",expand=False)
+    version("2024.1.0-12.0", sha256="36560ed0f2af951241d7551134b52902efd13abb249922e661dd0913f098ceca",expand=False)
     version("2024.0.2-12.0", )
     version("2024.0.1-12.0", )
 
