@@ -77,6 +77,7 @@ class FastFloat(CMakePackage):
     version("5.3.0", tag="v5.3.0")
     version("6.0.0", tag="v6.0.0")
     version("6.1.0", tag="v6.1.0")
+    version("6.1.1", tag="v6.1.1")
 
 
     variant("test", default=False, description="Build additional tests")

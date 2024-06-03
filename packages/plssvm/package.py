@@ -231,6 +231,19 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
     variant("language_bindings", default=False, description="Enable language bindings") # TODO: dependancies
 
+    variant("stdpar", default=False, description="Enable stdpar backend") # TODO: dependancies
+    conflicts("stdpar", when="+adaptivecpp", msg="AdaptiveCpp backend is not compatible with stdpar backend.")
+    conflicts("stdpar", when="+dpcpp", msg="DPC++ backend is not compatible with stdpar backend.")
+    conflicts("stdpar", when="+icpx", msg="Intel SYCL backend is not compatible with stdpar backend.")
+    conflicts("stdpar", when="+opencl", msg="OpenCL backend is not compatible with stdpar backend.")
+    conflicts("stdpar", when="+cuda", msg="CUDA backend is not compatible with stdpar backend.")
+    conflicts("stdpar", when="+hip", msg="HIP backend is not compatible with stdpar backend.")
+
+    variant("stdparimplementation",
+            when=stdpar,
+            default="adaptivecpp",
+            values=("adaptivecpp", "icpx", "gnu-tbb", "nvhpc", "roc")
+    )
 
 
     default_sycl_target_arch=default_cuda_arch(supported_cuda_archs)[0]
@@ -262,9 +275,9 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     # FIXME: Add dependencies if required.
 
     depends_on("fmt@9.1.0")
-    depends_on("cxxopts@3.1.1:")
+    depends_on("cxxopts@3.2.0")
     depends_on("igor@master")
-    depends_on("fast-float@3.10.0")
+    depends_on("fast-float@6.1.1")
     depends_on("googletest@1.14.0:", when="+test")
 
     depends_on("cmake@3.23:", type="build")
@@ -287,11 +300,18 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
 
     depends_on("cuda", when="+cuda")
+    depends_on("nvhpc", when="stdparimplementation=nvhpc", type="build")
     depends_on("adaptivecpp", when="+adaptivecpp")
+    depends_on("adaptivecpp", when="stdparimplementation=adaptivecpp")
     depends_on("llvm", when="+adaptivecpp")
 
     depends_on("intel-oneapi-compilers", when="+icpx")
+    depends_on("intel-oneapi-compilers", when="stdparimplementation=icpx")
     depends_on("intel-oneapi-tbb", when="+icpx")
+    depends_on("intel-oneapi-tbb", when="stdparimplementation=icpx")
+
+    # TODO: depends_on("tbb", when="stdparimplementation=gnu-tbb")
+    # TODO: depends_on("rocstdpar", when="stdparimplementation=roc")
 
 
 
