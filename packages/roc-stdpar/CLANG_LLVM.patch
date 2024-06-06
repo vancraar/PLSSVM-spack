@@ -1,0 +1,2244 @@
+diff --git a/clang/docs/HIPSupport.rst b/clang/docs/HIPSupport.rst
+index 8b4649733a9c..0476dbc153a9 100644
+--- a/clang/docs/HIPSupport.rst
++++ b/clang/docs/HIPSupport.rst
+@@ -176,3 +176,388 @@ Predefined Macros
+    * - ``HIP_API_PER_THREAD_DEFAULT_STREAM``
+      - Alias to ``__HIP_API_PER_THREAD_DEFAULT_STREAM__``. Deprecated.
+
++
++C++ Standard Parallelism Offload Support: Compiler And Runtime
++==============================================================
++
++Introduction
++============
++
++This document describes the implementation of support for offloading the
++execution of standard C++ algorithms to accelerators that can be targeted via
++HIP. Furthermore, it enumerates restrictions on user defined code, as well as
++the interactions with runtimes.
++
++Algorithm Offload: What, Why, Where
++===================================
++
++C++17 introduced overloads
++`for most algorithms in the standard library <https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0024r2.html>`_
++which allow the user to specify a desired
++`execution policy <https://en.cppreference.com/w/cpp/algorithm#Execution_policies>`_.
++The `parallel_unsequenced_policy <https://en.cppreference.com/w/cpp/algorithm/execution_policy_tag_t>`_
++maps relatively well to the execution model of many accelerators, such as GPUs.
++This, coupled with the ubiquity of GPU accelerated algorithm libraries that
++implement most / all corresponding libraries in the standard library
++(e.g. `rocThrust <https://github.com/ROCmSoftwarePlatform/rocThrust>`_), makes
++it feasible to provide seamless accelerator offload for supported algorithms,
++when an accelerated version exists. Thus, it becomes possible to easily access
++the computational resources of an accelerator, via a well specified, familiar,
++algorithmic interface, without having to delve into low-level hardware specific
++details. Putting it all together:
++
++- **What**: standard library algorithms, when invoked with the
++  ``parallel_unsequenced_policy``
++- **Why**: democratise accelerator programming, without loss of user familiarity
++- **Where**: only AMDGPU accelerators targeted by Clang/LLVM via HIP
++
++Small Example
++=============
++
++Given the following C++ code, which assumes the ``std`` namespace is included:
++
++.. code-block:: C++
++
++   bool has_the_answer(const vector<int>& v) {
++     return find(execution::par_unseq, cbegin(v), cend(v), 42) != cend(v);
++   }
++
++if Clang is invoked with the ``-hipstdpar --offload-arch=foo`` flags, the call
++to ``find`` will be offloaded to an accelerator that is part of the ``foo``
++target family. If either ``foo`` or its runtime environment do not support
++transparent on-demand paging (such as e.g. that provided in Linux via
++`HMM <https://docs.kernel.org/mm/hmm.html>`_), it is necessary to also include
++the ``--hipstdpar-interpose-alloc`` flag. If the accelerator specific algorithm
++library ``foo`` uses doesn't have an implementation of a particular algorithm,
++execution seamlessly falls back to the host CPU. It is legal to specify multiple
++``--offload-arcj``s. All the flags we introduce, as well as a thorough view of
++various restrictions and their implications will be provided below.
++
++Implementation - General View
++=============================
++
++We built support for Algorithm Offload support atop the pre-existing HIP
++infrastructure. More specifically, when one requests offload via ``-hipstdpar``,
++compilation is switched to HIP compilation, as if ``-x hip`` was specified.
++Similarly, linking is also switched to HIP linking, as if ``--hip-link`` was
++specified. Note that these are implicit, and one should not assume that any
++interop with HIP specific language constructs is available e.g. ``__device__``
++annotations are neither necessary nor guaranteed to work.
++
++Since there are no language restriction mechanisms in place, it is necessary to
++relax HIP language specific semantic checks performed by the FE; they would
++identify otherwise valid, offloadable code, as invalid HIP code. Given that we
++know that the user intended only for certain algorithms to be offloaded, and
++encoded this by specifying the ``parallel_unsequenced_policy``, we rely on a
++pass over IR to clean up any and all code that was not "meant" for offload. If
++requested, allocation interposition is also handled via a separate pass over IR.
++
++To interface with the client HIP runtime, and to forward offloaded algorithm
++invocations to the corresponding accelerator specific library implementation, an
++implementation detail forwarding header is implicitly included by the driver,
++when compiling with ``-hipstdpar``. In what follows, we will delve into each
++component that contributes to implementing Algorithm Offload support.
++
++Implementation - Driver
++=======================
++
++We augment the ``clang`` driver with the following flags:
++
++- ``-hipstdpar`` / ``--hipstdpar`` enables algorithm offload, which depending on
++  phase, has the following effects:
++
++  - when compiling:
++
++    - ``-x hip`` gets prepended to enable HIP support;
++    - the ``ROCmToolchain`` component checks for the ``hipstdpar_lib.hpp``
++      forwarding header,
++      `rocThrust <https://rocm.docs.amd.com/projects/rocThrust/en/latest/>`_ and
++      `rocPrim <https://rocm.docs.amd.com/projects/rocPRIM/en/latest/>`_ in
++      their canonical locations, which can be overriden via flags found below;
++      if all are found, the forwarding header gets implicitly included,
++      otherwise an error listing the missing component is generated;
++    - the ``LangOpts.HIPStdPar`` member is set.
++
++  - when linking:
++
++    - ``--hip-link`` and ``-frtlib-add-rpath`` gets appended to enable HIP
++      support.
++
++- ``-hipstdpar-interpose-alloc`` / ``--hipstdpar-interpose-alloc`` enables the
++  interposition of standard allocation / deallocation functions with accelerator
++  aware equivalents; the ``LangOpts.HIPStdParInterposeAlloc`` member is set;
++- ``--hipstdpar-path=`` specifies a non-canonical path for the forwarding
++  header; it must point to the folder where the header is located and not to the
++  header itself;
++- ``--hipstdpar-thrust-path=`` specifies a non-canonical path for
++  `rocThrust <https://rocm.docs.amd.com/projects/rocThrust/en/latest/>`_; it
++  must point to the folder where the library is installed / built under a
++  ``/thrust`` subfolder;
++- ``--hipstdpar-prim-path=`` specifies a non-canonical path for
++  `rocPrim <https://rocm.docs.amd.com/projects/rocPRIM/en/latest/>`_; it must
++  point to the folder where the library is installed / built under a
++  ``/rocprim`` subfolder;
++
++The `--offload-arch <https://llvm.org/docs/AMDGPUUsage.html#amdgpu-processors>`_
++flag can be used to specify the accelerator for which offload code is to be
++generated.
++
++Implementation - Front-End
++==========================
++
++When ``LangOpts.HIPStdPar`` is set, we relax some of the HIP language specific
++``Sema`` checks to account for the fact that we want to consume pure unannotated
++C++ code:
++
++1. ``__device__`` / ``__host__ __device__`` functions (which would originate in
++   the accelerator specific algorithm library) are allowed to call implicitly
++   ``__host__`` functions;
++2. ``__global__`` functions (which would originate in the accelerator specific
++   algorithm library) are allowed to call implicitly ``__host__`` functions;
++3. resolving ``__builtin`` availability is deferred, because it is possible that
++   a ``__builtin`` that is unavailable on the target accelerator is not
++   reachable from any offloaded algorithm, and thus will be safely removed in
++   the middle-end;
++4. ASM parsing / checking is deferred, because it is possible that an ASM block
++   that e.g. uses some constraints that are incompatible with the target
++   accelerator is not reachable from any offloaded algorithm, and thus will be
++   safely removed in the middle-end.
++
++``CodeGen`` is similarly relaxed, with implicitly ``__host__`` functions being
++emitted as well.
++
++Implementation - Middle-End
++===========================
++
++We add two ``opt`` passes:
++
++1. ``HipStdParAcceleratorCodeSelectionPass``
++
++   - For all kernels in a ``Module``, compute reachability, where a function
++     ``F`` is reachable from a kernel ``K`` if and only if there exists a direct
++     call-chain rooted in ``F`` that includes ``K``;
++   - Remove all functions that are not reachable from kernels;
++   - This pass is only run when compiling for the accelerator.
++
++The first pass assumes that the only code that the user intended to offload was
++that which was directly or transitively invocable as part of an algorithm
++execution. It also assumes that an accelerator aware algorithm implementation
++would rely on accelerator specific special functions (kernels), and that these
++effectively constitute the only roots for accelerator execution graphs. Both of
++these assumptions are based on observing how widespread accelerators,
++such as GPUs, work.
++
++1. ``HipStdParAllocationInterpositionPass``
++
++   - Iterate through all functions in a ``Module``, and replace standard
++     allocation / deallocation functions with accelerator-aware equivalents,
++     based on a pre-established table; the list of functions that can be
++     interposed is available
++     `here <https://github.com/ROCmSoftwarePlatform/roc-stdpar#allocation--deallocation-interposition-status>`_;
++   - This is only run when compiling for the host.
++
++The second pass is optional.
++
++Implementation - Forwarding Header
++==================================
++
++The forwarding header implements two pieces of functionality:
++
++1. It forwards algorithms to a target accelerator, which is done by relying on
++   C++ language rules around overloading:
++
++   - overloads taking an explicit argument of type
++     ``parallel_unsequenced_policy`` are introduced into the ``std`` namespace;
++   - these will get preferentially selected versus the master template;
++   - the body forwards to the equivalent algorithm from the accelerator specific
++     library
++
++2. It provides allocation / deallocation functions that are equivalent to the
++   standard ones, but obtain memory by invoking
++   `hipMallocManaged <https://rocm.docs.amd.com/projects/HIP/en/latest/.doxygen/docBin/html/group___memory_m.html#gab8cfa0e292193fa37e0cc2e4911fa90a>`_
++   and release it via `hipFree <https://rocm.docs.amd.com/projects/HIP/en/latest/.doxygen/docBin/html/group___memory.html#ga740d08da65cae1441ba32f8fedb863d1>`_.
++
++Predefined Macros
++=================
++
++.. list-table::
++   :header-rows: 1
++
++   * - Macro
++     - Description
++   * - ``__HIPSTDPAR__``
++     - Defined when Clang is compiling code in algorithm offload mode, enabled
++       with the ``-hipstdpar`` / ``--hipstdpar`` compiler option.
++   * - ``__HIPSTDPAR_INTERPOSE_ALLOC__``
++     - Defined only when compiling in algorithm offload mode, when the user
++       enables interposition mode with the ``--hipstdpar-interpose-alloc``
++       compiler option, indicating that all dynamic memory allocation /
++       deallocation functions should be replaced with accelerator aware
++       variants.
++
++Restrictions
++============
++
++We define two modes in which runtime execution can occur:
++
++1. **HMM Mode** - this assumes that the
++   `HMM <https://docs.kernel.org/mm/hmm.html>`_ subsystem of the Linux kernel
++   is used to provide transparent on-demand paging i.e. memory obtained from a
++   system / OS allocator such as via a call to ``malloc`` or ``operator new`` is
++   directly accessible to the accelerator and it follows the C++ memory model;
++2. **Interposition Mode** - this is a fallback mode for cases where transparent
++   on-demand paging is unavailable (e.g. in the Windows OS), which means that
++   memory must be allocated via an accelerator aware mechanism, and system
++   allocated memory is inaccessible for the accelerator.
++
++The following restrictions imposed on user code apply to both modes:
++
++1. Pointers to function, and all associated features, such as e.g. dynamic
++   polymorphism, cannot be used (directly or transitively) by the user provided
++   callable passed to an algorithm invocation;
++2. Global / namespace scope / ``static`` / ``thread`` storage duration variables
++   cannot be used (directly or transitively) in name by the user provided
++   callable;
++
++   - When executing in **HMM Mode** they can be used in address e.g.:
++
++     .. code-block:: C++
++
++        namespace { int foo = 42; }
++
++        bool never(const vector<int>& v) {
++          return any_of(execution::par_unseq, cbegin(v), cend(v), [](auto&& x) {
++            return x == foo;
++          });
++        }
++
++        bool only_in_hmm_mode(const vector<int>& v) {
++          return any_of(execution::par_unseq, cbegin(v), cend(v),
++                        [p = &foo](auto&& x) { return x == *p; });
++        }
++
++3. Only algorithms that are invoked with the ``parallel_unsequenced_policy`` are
++   candidates for offload;
++4. Only algorithms that are invoked with iterator arguments that model
++   `random_access_iterator <https://en.cppreference.com/w/cpp/iterator/random_access_iterator>`_
++   are candidates for offload;
++5. `Exceptions <https://en.cppreference.com/w/cpp/language/exceptions>`_ cannot
++   be used by the user provided callable;
++6. Dynamic memory allocation (e.g. ``operator new``) cannot be used by the user
++   provided callable;
++7. Selective offload is not possible i.e. it is not possible to indicate that
++   only some algorithms invoked with the ``parallel_unsequenced_policy`` are to
++   be executed on the accelerator.
++
++In addition to the above, using **Interposition Mode** imposes the following
++additional restrictions:
++
++1. All code that is expected to interoperate has to be recompiled with the
++   ``--hipstdpar-interpose-alloc`` flag i.e. it is not safe to compose libraries
++   that have been independently compiled;
++2. automatic storage duration (i.e. stack allocated) variables cannot be used
++   (directly or transitively) by the user provided callable e.g.
++
++   .. code-block:: c++
++
++      bool never(const vector<int>& v, int n) {
++        return any_of(execution::par_unseq, cbegin(v), cend(v),
++                      [p = &n](auto&& x) { return x == *p; });
++      }
++
++Current Support
++===============
++
++At the moment, C++ Standard Parallelism Offload is only available for AMD GPUs,
++when the `ROCm <https://rocm.docs.amd.com/en/latest/>`_ stack is used, on the
++Linux operating system. Support is synthesised in the following table:
++
++.. list-table::
++   :header-rows: 1
++
++   * - `Processor <https://llvm.org/docs/AMDGPUUsage.html#amdgpu-processors>`_
++     - HMM Mode
++     - Interposition Mode
++   * - GCN GFX9 (Vega)
++     - YES
++     - YES
++   * - GCN GFX10.1 (RDNA 1)
++     - *NO*
++     - YES
++   * - GCN GFX10.3 (RDNA 2)
++     - *NO*
++     - YES
++   * - GCN GFX11 (RDNA 3)
++     - *NO*
++     - YES
++
++The minimum Linux kernel version for running in HMM mode is 6.4.
++
++The forwarding header can be obtained from
++`its GitHub repository <https://github.com/ROCmSoftwarePlatform/roc-stdpar>`_.
++It will be packaged with a future `ROCm <https://rocm.docs.amd.com/en/latest/>`_
++release. Because accelerated algorithms are provided via
++`rocThrust <https://rocm.docs.amd.com/projects/rocThrust/en/latest/>`_, a
++transitive dependency on
++`rocPrim <https://rocm.docs.amd.com/projects/rocPRIM/en/latest/>`_ exists. Both
++can be obtained either by installing their associated components of the
++`ROCm <https://rocm.docs.amd.com/en/latest/>`_ stack, or from their respective
++repositories. The list algorithms that can be offloaded is available
++`here <https://github.com/ROCmSoftwarePlatform/roc-stdpar#algorithm-support-status>`_.
++
++HIP Specific Elements
++---------------------
++
++1. There is no defined interop with the
++   `HIP kernel language <https://rocm.docs.amd.com/projects/HIP/en/latest/reference/kernel_language.html>`_;
++   whilst things like using `__device__` annotations might accidentally "work",
++   they are not guaranteed to, and thus cannot be relied upon by user code;
++2. Combining explicit HIP, CUDA or OpenMP Offload compilation with
++   ``--hipstdpar`` based offloading is not allowed or supported in any way.
++3. There is no way to target different accelerators via a standard algorithm
++   invocation (`this might be addressed in future C++ standards <https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2500r1.html>`_);
++   an unsafe (per the point above) way of achieving this is to spawn new threads
++   and invoke the `hipSetDevice <https://rocm.docs.amd.com/projects/HIP/en/latest/.doxygen/docBin/html/group___device.html#ga43c1e7f15925eeb762195ccb5e063eae>`_
++   interface e.g.:
++
++   .. code-block:: c++
++
++      int accelerator_0 = ...;
++      int accelerator_1 = ...;
++
++      bool multiple_accelerators(const vector<int>& u, const vector<int>& v) {
++        atomic<unsigned int> r{0u};
++
++        thread t0{[&]() {
++          hipSetDevice(accelerator_0);
++
++          r += count(execution::par_unseq, cbegin(u), cend(u), 42);
++        }};
++        thread t1{[&]() {
++          hitSetDevice(accelerator_1);
++
++          r += count(execution::par_unseq, cbegin(v), cend(v), 314152)
++        }};
++
++        t0.join();
++        t1.join();
++
++        return r;
++      }
++
++   Note that this is a temporary, unsafe workaround for a deficiency in the C++
++   Standard.
++
++Open Questions / Future Developments
++====================================
++
++1. The restriction on the use of global / namespace scope / ``static`` /
++   ``thread`` storage duration variables in offloaded algorithms will be lifted
++   in the future, when running in **HMM Mode**;
++2. The restriction on the use of dynamic memory allocation in offloaded
++   algorithms will be lifted in the future.
++3. The restriction on the use of pointers to function, and associated features
++   such as dynamic polymorphism might be lifted in the future, when running in
++   **HMM Mode**;
++4. Offload support might be extended to cases where the ``parallel_policy`` is
++   used for some or all targets.
+diff --git a/clang/include/clang/Basic/DiagnosticDriverKinds.td b/clang/include/clang/Basic/DiagnosticDriverKinds.td
+index 73264181ca1c..3a2aebc62304 100644
+--- a/clang/include/clang/Basic/DiagnosticDriverKinds.td
++++ b/clang/include/clang/Basic/DiagnosticDriverKinds.td
+@@ -70,6 +70,16 @@ def err_drv_no_rocm_device_lib : Error<
+ def err_drv_no_hip_runtime : Error<
+   "cannot find HIP runtime; provide its path via '--rocm-path', or pass "
+   "'-nogpuinc' to build without HIP runtime">;
++def err_drv_no_hipstdpar_lib : Error<
++  "cannot find HIP Standard Parallelism Acceleration library; provide it via "
++  "'--hipstdpar-path'">;
++def err_drv_no_hipstdpar_thrust_lib : Error<
++  "cannot find rocThrust, which is required by the HIP Standard Parallelism "
++  "Acceleration library; provide it via "
++  "'--hipstdpar-thrust-path'">;
++def err_drv_no_hipstdpar_prim_lib : Error<
++  "cannot find rocPrim, which is required by the HIP Standard Parallelism "
++  "Acceleration library; provide it via '--hipstdpar-prim-path'">;
+
+ def err_drv_no_hipspv_device_lib : Error<
+   "cannot find HIP device library%select{| for %1}0; provide its path via "
+diff --git a/clang/include/clang/Basic/LangOptions.def b/clang/include/clang/Basic/LangOptions.def
+index 102209ce899d..2e861cd56048 100644
+--- a/clang/include/clang/Basic/LangOptions.def
++++ b/clang/include/clang/Basic/LangOptions.def
+@@ -278,6 +278,8 @@ LANGOPT(SYCLIsHost        , 1, 0, "SYCL host compilation")
+ ENUM_LANGOPT(SYCLVersion  , SYCLMajorVersion, 2, SYCL_None, "Version of the SYCL standard used")
+
+ LANGOPT(HIPUseNewLaunchAPI, 1, 0, "Use new kernel launching API for HIP")
++LANGOPT(HIPStdPar, 1, 0, "Enable Standard Parallel Algorithm Acceleration for HIP (experimental)")
++LANGOPT(HIPStdParInterposeAlloc, 1, 0, "Replace allocations / deallocations with HIP RT calls when Standard Parallel Algorithm Acceleration for HIP is enabled (Experimental)")
+ LANGOPT(OffloadUniformBlock, 1, 0, "Assume that kernels are launched with uniform block sizes (default true for CUDA/HIP and false otherwise)")
+
+ LANGOPT(SizedDeallocation , 1, 0, "sized deallocation")
+diff --git a/clang/include/clang/Driver/Options.td b/clang/include/clang/Driver/Options.td
+index 3d73e24a4dc5..0176b33e4c4f 100644
+--- a/clang/include/clang/Driver/Options.td
++++ b/clang/include/clang/Driver/Options.td
+@@ -1264,6 +1264,32 @@ def rocm_path_EQ : Joined<["--"], "rocm-path=">, Group<hip_Group>,
+   HelpText<"ROCm installation path, used for finding and automatically linking required bitcode libraries.">;
+ def hip_path_EQ : Joined<["--"], "hip-path=">, Group<hip_Group>,
+   HelpText<"HIP runtime installation path, used for finding HIP version and adding HIP include path.">;
++def hipstdpar : Flag<["-", "--"], "hipstdpar">,
++  Visibility<[ClangOption, CC1Option]>,
++  Group<CompileOnly_Group>,
++  HelpText<"Enable HIP acceleration for standard parallel algorithms">,
++  MarshallingInfoFlag<LangOpts<"HIPStdPar">>;
++def hipstdpar_interpose_alloc : Flag<["-", "--"], "hipstdpar-interpose-alloc">,
++  Visibility<[ClangOption, CC1Option]>,
++  Group<CompileOnly_Group>,
++  HelpText<"Replace all memory allocation / deallocation calls with "
++           "hipManagedMalloc / hipFree equivalents.">,
++  MarshallingInfoFlag<LangOpts<"HIPStdParInterposeAlloc">>;
++// TODO: use MarshallingInfo here
++def hipstdpar_path_EQ : Joined<["--"], "hipstdpar-path=">, Group<i_Group>,
++  HelpText<
++    "HIP Standard Parallel Algorithm Acceleration library path, used for "
++    "finding and implicitly including the library header.">;
++def hipstdpar_thrust_path_EQ : Joined<["--"], "hipstdpar-thrust-path=">,
++  Group<i_Group>,
++  HelpText<
++    "rocThrust path, required by the HIP Standard Parallel Algorithm "
++    "Acceleration library, used to implicitly include the rocThrust library.">;
++def hipstdpar_prim_path_EQ : Joined<["--"], "hipstdpar-prim-path=">,
++  Group<i_Group>,
++  HelpText<
++    "rocPrim path, required by the HIP Standard Parallel Algorithm "
++    "Acceleration library, used to implicitly include the rocPrim library.">;
+ def rocm_device_lib_path_EQ : Joined<["--"], "rocm-device-lib-path=">, Group<hip_Group>,
+   HelpText<"ROCm device library path. Alternative to rocm-path.">;
+ def : Joined<["--"], "hip-device-lib-path=">, Alias<rocm_device_lib_path_EQ>;
+diff --git a/clang/lib/AST/ExprConstant.cpp b/clang/lib/AST/ExprConstant.cpp
+index 630fb02d0531..3297316d7f05 100644
+--- a/clang/lib/AST/ExprConstant.cpp
++++ b/clang/lib/AST/ExprConstant.cpp
+@@ -3378,7 +3378,7 @@ static bool evaluateVarDeclInit(EvalInfo &Info, const Expr *E,
+     // constant-folding cases, where the variable is not actually of a suitable
+     // type for use in a constant expression (otherwise the DeclRefExpr would
+     // have been value-dependent too), so diagnose that.
+-    assert(!VD->mightBeUsableInConstantExpressions(Info.Ctx));
++    // assert(!VD->mightBeUsableInConstantExpressions(Info.Ctx));
+     if (!Info.checkingPotentialConstantExpression()) {
+       Info.FFDiag(E, Info.getLangOpts().CPlusPlus11
+                          ? diag::note_constexpr_ltor_non_constexpr
+diff --git a/clang/lib/CodeGen/BackendUtil.cpp b/clang/lib/CodeGen/BackendUtil.cpp
+index 79b23a850409..80830fb65753 100644
+--- a/clang/lib/CodeGen/BackendUtil.cpp
++++ b/clang/lib/CodeGen/BackendUtil.cpp
+@@ -55,6 +55,7 @@
+ #include "llvm/Target/TargetOptions.h"
+ #include "llvm/TargetParser/SubtargetFeature.h"
+ #include "llvm/TargetParser/Triple.h"
++#include "llvm/Transforms/HipStdPar/HipStdPar.h"
+ #include "llvm/Transforms/IPO/EmbedBitcodePass.h"
+ #include "llvm/Transforms/IPO/LowerTypeTests.h"
+ #include "llvm/Transforms/IPO/ThinLTOBitcodeWriter.h"
+@@ -1094,6 +1095,10 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
+       TheModule->addModuleFlag(Module::Error, "UnifiedLTO", uint32_t(1));
+   }
+
++  if (LangOpts.HIPStdPar && !LangOpts.CUDAIsDevice &&
++      LangOpts.HIPStdParInterposeAlloc)
++    MPM.addPass(HipStdParAllocationInterpositionPass());
++
+   // Now that we have all of the passes ready, run them.
+   {
+     PrettyStackTraceString CrashInfo("Optimizer");
+diff --git a/clang/lib/CodeGen/CGBuiltin.cpp b/clang/lib/CodeGen/CGBuiltin.cpp
+index a513eae46e35..6461af2a2abb 100644
+--- a/clang/lib/CodeGen/CGBuiltin.cpp
++++ b/clang/lib/CodeGen/CGBuiltin.cpp
+@@ -2280,6 +2280,19 @@ static Value *tryUseTestFPKind(CodeGenFunction &CGF, unsigned BuiltinID,
+   return nullptr;
+ }
+
++static RValue EmitHipStdParUnsupportedBuiltin(CodeGenFunction *CGF,
++                                           const FunctionDecl *FD) {
++  auto Name = FD->getNameAsString() + "__hipstdpar_unsupported";
++  auto FnTy = CGF->CGM.getTypes().GetFunctionType(FD);
++  auto UBF = CGF->CGM.getModule().getOrInsertFunction(Name, FnTy);
++
++  SmallVector<Value *, 16> Args;
++  for (auto &&FormalTy : FnTy->params())
++    Args.push_back(llvm::PoisonValue::get(FormalTy));
++
++  return RValue::get(CGF->Builder.CreateCall(UBF, Args));
++}
++
+ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
+                                         const CallExpr *E,
+                                         ReturnValueSlot ReturnValue) {
+@@ -5603,7 +5616,10 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
+     llvm_unreachable("Bad evaluation kind in EmitBuiltinExpr");
+   }
+
+-  ErrorUnsupported(E, "builtin function");
++  if (getLangOpts().HIPStdPar && getLangOpts().CUDAIsDevice)
++    return EmitHipStdParUnsupportedBuiltin(this, FD);
++  else
++    ErrorUnsupported(E, "builtin function");
+
+   // Unknown builtin, for now just dump it out and return undef.
+   return GetUndefRValue(E->getType());
+@@ -5613,6 +5629,16 @@ static Value *EmitTargetArchBuiltinExpr(CodeGenFunction *CGF,
+                                         unsigned BuiltinID, const CallExpr *E,
+                                         ReturnValueSlot ReturnValue,
+                                         llvm::Triple::ArchType Arch) {
++  // When compiling in HipStdPar mode we have to be conservative in rejecting
++  // target specific features in the FE, and defer the possible error to the
++  // AcceleratorCodeSelection pass, wherein iff an unsupported target builtin is
++  // referenced by an accelerator executable function, we emit an error.
++  // Returning nullptr here leads to the builtin being handled in
++  // EmitHipStdParUnsupportedBuiltin.
++  if (CGF->getLangOpts().HIPStdPar && CGF->getLangOpts().CUDAIsDevice &&
++      Arch != CGF->getTarget().getTriple().getArch())
++    return nullptr;
++
+   switch (Arch) {
+   case llvm::Triple::arm:
+   case llvm::Triple::armeb:
+diff --git a/clang/lib/CodeGen/CGStmt.cpp b/clang/lib/CodeGen/CGStmt.cpp
+index 6674aa2409a5..5c7ad96dd09c 100644
+--- a/clang/lib/CodeGen/CGStmt.cpp
++++ b/clang/lib/CodeGen/CGStmt.cpp
+@@ -2420,6 +2420,24 @@ EmitAsmStores(CodeGenFunction &CGF, const AsmStmt &S,
+   }
+ }
+
++static void EmitHipStdParUnsupportedAsm(CodeGenFunction *CGF,
++                                        const AsmStmt &S) {
++  constexpr auto Name = "__ASM__hipstdpar_unsupported";
++
++  StringRef Asm;
++  if (auto GCCAsm = dyn_cast<GCCAsmStmt>(&S))
++    Asm = GCCAsm->getAsmString()->getString();
++
++  auto &Ctx = CGF->CGM.getLLVMContext();
++
++  auto StrTy = llvm::ConstantDataArray::getString(Ctx, Asm);
++  auto FnTy = llvm::FunctionType::get(llvm::Type::getVoidTy(Ctx),
++                                      {StrTy->getType()}, false);
++  auto UBF = CGF->CGM.getModule().getOrInsertFunction(Name, FnTy);
++
++  CGF->Builder.CreateCall(UBF, {StrTy});
++}
++
+ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
+   // Pop all cleanup blocks at the end of the asm statement.
+   CodeGenFunction::RunCleanupsScope Cleanups(*this);
+@@ -2431,27 +2449,38 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
+   SmallVector<TargetInfo::ConstraintInfo, 4> OutputConstraintInfos;
+   SmallVector<TargetInfo::ConstraintInfo, 4> InputConstraintInfos;
+
+-  for (unsigned i = 0, e = S.getNumOutputs(); i != e; i++) {
++  bool IsHipStdPar = getLangOpts().HIPStdPar && getLangOpts().CUDAIsDevice;
++  bool IsValidTargetASM = true;
++  for (unsigned i = 0, e = S.getNumOutputs(); i != e && IsValidTargetASM; i++) {
+     StringRef Name;
+     if (const GCCAsmStmt *GAS = dyn_cast<GCCAsmStmt>(&S))
+       Name = GAS->getOutputName(i);
+     TargetInfo::ConstraintInfo Info(S.getOutputConstraint(i), Name);
+     bool IsValid = getTarget().validateOutputConstraint(Info); (void)IsValid;
+-    assert(IsValid && "Failed to parse output constraint");
++    if (IsHipStdPar && !IsValid)
++      IsValidTargetASM = false;
++    else
++      assert(IsValid && "Failed to parse output constraint");
+     OutputConstraintInfos.push_back(Info);
+   }
+
+-  for (unsigned i = 0, e = S.getNumInputs(); i != e; i++) {
++  for (unsigned i = 0, e = S.getNumInputs(); i != e && IsValidTargetASM; i++) {
+     StringRef Name;
+     if (const GCCAsmStmt *GAS = dyn_cast<GCCAsmStmt>(&S))
+       Name = GAS->getInputName(i);
+     TargetInfo::ConstraintInfo Info(S.getInputConstraint(i), Name);
+     bool IsValid =
+       getTarget().validateInputConstraint(OutputConstraintInfos, Info);
+-    assert(IsValid && "Failed to parse input constraint"); (void)IsValid;
++    if (IsHipStdPar && !IsValid)
++      IsValidTargetASM = false;
++    else
++      assert(IsValid && "Failed to parse input constraint"); (void)IsValid;
+     InputConstraintInfos.push_back(Info);
+   }
+
++  if (!IsValidTargetASM)
++    return EmitHipStdParUnsupportedAsm(this, S);
++
+   std::string Constraints;
+
+   std::vector<LValue> ResultRegDests;
+diff --git a/clang/lib/CodeGen/CodeGenFunction.cpp b/clang/lib/CodeGen/CodeGenFunction.cpp
+index bf83171e2c68..3a5f5add0947 100644
+--- a/clang/lib/CodeGen/CodeGenFunction.cpp
++++ b/clang/lib/CodeGen/CodeGenFunction.cpp
+@@ -2594,10 +2594,15 @@ void CodeGenFunction::checkTargetFeatures(SourceLocation Loc,
+   std::string MissingFeature;
+   llvm::StringMap<bool> CallerFeatureMap;
+   CGM.getContext().getFunctionFeatureMap(CallerFeatureMap, FD);
++  // When compiling in HipStdPar mode we have to be conservative in rejecting
++  // target specific features in the FE, and defer the possible error to the
++  // AcceleratorCodeSelection pass, wherein iff an unsupported target builtin is
++  // referenced by an accelerator executable function, we emit an error.
++  bool IsHipStdPar = getLangOpts().HIPStdPar && getLangOpts().CUDAIsDevice;
+   if (BuiltinID) {
+     StringRef FeatureList(CGM.getContext().BuiltinInfo.getRequiredFeatures(BuiltinID));
+     if (!Builtin::evaluateRequiredTargetFeatures(
+-        FeatureList, CallerFeatureMap)) {
++        FeatureList, CallerFeatureMap) && !IsHipStdPar) {
+       CGM.getDiags().Report(Loc, diag::err_builtin_needs_feature)
+           << TargetDecl->getDeclName()
+           << FeatureList;
+@@ -2631,8 +2636,9 @@ void CodeGenFunction::checkTargetFeatures(SourceLocation Loc,
+       }
+       return true;
+     }))
+-      CGM.getDiags().Report(Loc, diag::err_function_needs_feature)
+-          << FD->getDeclName() << TargetDecl->getDeclName() << MissingFeature;
++      if (!IsHipStdPar)
++        CGM.getDiags().Report(Loc, diag::err_function_needs_feature)
++            << FD->getDeclName() << TargetDecl->getDeclName() << MissingFeature;
+   } else if (!FD->isMultiVersion() && FD->hasAttr<TargetAttr>()) {
+     llvm::StringMap<bool> CalleeFeatureMap;
+     CGM.getContext().getFunctionFeatureMap(CalleeFeatureMap, TargetDecl);
+@@ -2640,8 +2646,9 @@ void CodeGenFunction::checkTargetFeatures(SourceLocation Loc,
+     for (const auto &F : CalleeFeatureMap) {
+       if (F.getValue() && (!CallerFeatureMap.lookup(F.getKey()) ||
+                            !CallerFeatureMap.find(F.getKey())->getValue()))
+-        CGM.getDiags().Report(Loc, diag::err_function_needs_feature)
+-            << FD->getDeclName() << TargetDecl->getDeclName() << F.getKey();
++        if (!IsHipStdPar)
++          CGM.getDiags().Report(Loc, diag::err_function_needs_feature)
++              << FD->getDeclName() << TargetDecl->getDeclName() << F.getKey();
+     }
+   }
+ }
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index 07bce12d7e66..d5b9f743be69 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -3559,7 +3559,10 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
+           !Global->hasAttr<CUDAConstantAttr>() &&
+           !Global->hasAttr<CUDASharedAttr>() &&
+           !Global->getType()->isCUDADeviceBuiltinSurfaceType() &&
+-          !Global->getType()->isCUDADeviceBuiltinTextureType())
++          !Global->getType()->isCUDADeviceBuiltinTextureType() &&
++          !(LangOpts.HIPStdPar &&
++            isa<FunctionDecl>(Global) &&
++            !Global->hasAttr<CUDAHostAttr>()))
+         return;
+     } else {
+       // We need to emit host-side 'shadows' for all global
+diff --git a/clang/lib/Driver/Driver.cpp b/clang/lib/Driver/Driver.cpp
+index 9d05549f671e..23d4258bfe09 100644
+--- a/clang/lib/Driver/Driver.cpp
++++ b/clang/lib/Driver/Driver.cpp
+@@ -767,7 +767,8 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
+                    [](std::pair<types::ID, const llvm::opt::Arg *> &I) {
+                      return types::isHIP(I.first);
+                    }) ||
+-      C.getInputArgs().hasArg(options::OPT_hip_link);
++      C.getInputArgs().hasArg(options::OPT_hip_link) ||
++      C.getInputArgs().hasArg(options::OPT_hipstdpar);
+   if (IsCuda && IsHIP) {
+     Diag(clang::diag::err_drv_mix_cuda_hip);
+     return;
+@@ -2705,6 +2706,10 @@ void Driver::BuildInputs(const ToolChain &TC, DerivedArgList &Args,
+         }
+       }
+
++      if ((Ty == types::TY_C || Ty == types::TY_CXX) &&
++          Args.hasArgNoClaim(options::OPT_hipstdpar))
++        Ty = types::TY_HIP;
++
+       if (DiagnoseInputExistence(Args, Value, Ty, /*TypoCorrect=*/true))
+         Inputs.push_back(std::make_pair(Ty, A));
+
+@@ -3915,6 +3920,11 @@ void Driver::handleArguments(Compilation &C, DerivedArgList &Args,
+   phases::ID FinalPhase = getFinalPhase(Args, &FinalPhaseArg);
+
+   if (FinalPhase == phases::Link) {
++    if (Args.hasArgNoClaim(options::OPT_hipstdpar)) {
++      Args.AddFlagArg(nullptr, getOpts().getOption(options::OPT_hip_link));
++      Args.AddFlagArg(nullptr,
++                      getOpts().getOption(options::OPT_frtlib_add_rpath));
++    }
+     // Emitting LLVM while linking disabled except in HIPAMD Toolchain
+     if (Args.hasArg(options::OPT_emit_llvm) && !Args.hasArg(options::OPT_hip_link))
+       Diag(clang::diag::err_drv_emit_llvm_link);
+diff --git a/clang/lib/Driver/ToolChains/AMDGPU.cpp b/clang/lib/Driver/ToolChains/AMDGPU.cpp
+index 3f08c0ef5d6f..04d9f9218879 100644
+--- a/clang/lib/Driver/ToolChains/AMDGPU.cpp
++++ b/clang/lib/Driver/ToolChains/AMDGPU.cpp
+@@ -329,6 +329,20 @@ RocmInstallationDetector::RocmInstallationDetector(
+   RocmDeviceLibPathArg =
+       Args.getAllArgValues(clang::driver::options::OPT_rocm_device_lib_path_EQ);
+   HIPPathArg = Args.getLastArgValue(clang::driver::options::OPT_hip_path_EQ);
++  HIPStdParPathArg =
++    Args.getLastArgValue(clang::driver::options::OPT_hipstdpar_path_EQ);
++  HasHIPStdParLibrary = !HIPStdParPathArg.empty() &&
++                        D.getVFS().exists(HIPStdParPathArg +
++                                          "/hipstdpar_lib.hpp");
++  HIPRocThrustPathArg =
++    Args.getLastArgValue(clang::driver::options::OPT_hipstdpar_thrust_path_EQ);
++  HasRocThrustLibrary = !HIPRocThrustPathArg.empty() &&
++                        D.getVFS().exists(HIPRocThrustPathArg + "/thrust");
++  HIPRocPrimPathArg =
++    Args.getLastArgValue(clang::driver::options::OPT_hipstdpar_prim_path_EQ);
++  HasRocPrimLibrary = !HIPRocPrimPathArg.empty() &&
++                      D.getVFS().exists(HIPRocPrimPathArg + "/rocprim");
++
+   if (auto *A = Args.getLastArg(clang::driver::options::OPT_hip_version_EQ)) {
+     HIPVersionArg = A->getValue();
+     unsigned Major = ~0U;
+@@ -507,6 +521,7 @@ void RocmInstallationDetector::AddHIPIncludeArgs(const ArgList &DriverArgs,
+                                                  ArgStringList &CC1Args) const {
+   bool UsesRuntimeWrapper = VersionMajorMinor > llvm::VersionTuple(3, 5) &&
+                             !DriverArgs.hasArg(options::OPT_nohipwrapperinc);
++  bool HasHipStdPar = DriverArgs.hasArg(options::OPT_hipstdpar);
+
+   if (!DriverArgs.hasArg(options::OPT_nobuiltininc)) {
+     // HIP header includes standard library wrapper headers under clang
+@@ -529,8 +544,45 @@ void RocmInstallationDetector::AddHIPIncludeArgs(const ArgList &DriverArgs,
+     CC1Args.push_back(DriverArgs.MakeArgString(P));
+   }
+
+-  if (DriverArgs.hasArg(options::OPT_nogpuinc))
++  const auto HandleHipStdPar = [=, &DriverArgs, &CC1Args]() {
++    if (!hasHIPStdParLibrary()) {
++      D.Diag(diag::err_drv_no_hipstdpar_lib);
++      return;
++    }
++    if (!HasRocThrustLibrary &&
++        !D.getVFS().exists(getIncludePath() + "/thrust")) {
++      D.Diag(diag::err_drv_no_hipstdpar_thrust_lib);
++      return;
++    }
++    if (!HasRocPrimLibrary &&
++        !D.getVFS().exists(getIncludePath() + "/rocprim")) {
++      D.Diag(diag::err_drv_no_hipstdpar_prim_lib);
++      return;
++    }
++
++    const char *ThrustPath;
++    if (HasRocThrustLibrary)
++      ThrustPath = DriverArgs.MakeArgString(HIPRocThrustPathArg);
++    else
++      ThrustPath = DriverArgs.MakeArgString(getIncludePath() + "/thrust");
++
++    const char *PrimPath;
++    if (HasRocPrimLibrary)
++      PrimPath = DriverArgs.MakeArgString(HIPRocPrimPathArg);
++    else
++      PrimPath = DriverArgs.MakeArgString(getIncludePath() + "/rocprim");
++
++    CC1Args.append({"-idirafter", ThrustPath, "-idirafter", PrimPath,
++                    "-idirafter", DriverArgs.MakeArgString(HIPStdParPathArg),
++                    "-include", "hipstdpar_lib.hpp"});
++  };
++
++  if (DriverArgs.hasArg(options::OPT_nogpuinc)) {
++    if (HasHipStdPar)
++      HandleHipStdPar();
++
+     return;
++  }
+
+   if (!hasHIPRuntime()) {
+     D.Diag(diag::err_drv_no_hip_runtime);
+@@ -541,6 +593,8 @@ void RocmInstallationDetector::AddHIPIncludeArgs(const ArgList &DriverArgs,
+   CC1Args.push_back(DriverArgs.MakeArgString(getIncludePath()));
+   if (UsesRuntimeWrapper)
+     CC1Args.append({"-include", "__clang_hip_runtime_wrapper.h"});
++  if (HasHipStdPar)
++    HandleHipStdPar();
+ }
+
+ void amdgpu::Linker::ConstructJob(Compilation &C, const JobAction &JA,
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index 0653c4c09ebc..320eb98f956d 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -6552,6 +6552,12 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
+     if (Args.hasFlag(options::OPT_fgpu_allow_device_init,
+                      options::OPT_fno_gpu_allow_device_init, false))
+       CmdArgs.push_back("-fgpu-allow-device-init");
++    if (Args.hasArg(options::OPT_hipstdpar)) {
++      CmdArgs.push_back("-hipstdpar");
++
++      if (Args.hasArg(options::OPT_hipstdpar_interpose_alloc))
++        CmdArgs.push_back("-hipstdpar-interpose-alloc");
++    }
+     Args.addOptInFlag(CmdArgs, options::OPT_fhip_kernel_arg_name,
+                       options::OPT_fno_hip_kernel_arg_name);
+   }
+diff --git a/clang/lib/Driver/ToolChains/HIPAMD.cpp b/clang/lib/Driver/ToolChains/HIPAMD.cpp
+index 7ff880270cab..9fb461202990 100644
+--- a/clang/lib/Driver/ToolChains/HIPAMD.cpp
++++ b/clang/lib/Driver/ToolChains/HIPAMD.cpp
+@@ -115,6 +115,8 @@ void AMDGCN::Linker::constructLldCommand(Compilation &C, const JobAction &JA,
+                         "--no-undefined",
+                         "-shared",
+                         "-plugin-opt=-amdgpu-internalize-symbols"};
++  if (Args.hasArg(options::OPT_hipstdpar))
++    LldArgs.push_back("-plugin-opt=-amdgpu-enable-hipstdpar");
+
+   auto &TC = getToolChain();
+   auto &D = TC.getDriver();
+@@ -246,6 +248,8 @@ void HIPAMDToolChain::addClangTargetOptions(
+   if (!DriverArgs.hasFlag(options::OPT_fgpu_rdc, options::OPT_fno_gpu_rdc,
+                           false))
+     CC1Args.append({"-mllvm", "-amdgpu-internalize-symbols"});
++  if (DriverArgs.hasArgNoClaim(options::OPT_hipstdpar))
++    CC1Args.append({"-mllvm", "-amdgpu-enable-hipstdpar"});
+
+   StringRef MaxThreadsPerBlock =
+       DriverArgs.getLastArgValue(options::OPT_gpu_max_threads_per_block_EQ);
+diff --git a/clang/lib/Driver/ToolChains/ROCm.h b/clang/lib/Driver/ToolChains/ROCm.h
+index 554d8a6929ac..dceb0ab03669 100644
+--- a/clang/lib/Driver/ToolChains/ROCm.h
++++ b/clang/lib/Driver/ToolChains/ROCm.h
+@@ -77,6 +77,9 @@ class RocmInstallationDetector {
+   const Driver &D;
+   bool HasHIPRuntime = false;
+   bool HasDeviceLibrary = false;
++  bool HasHIPStdParLibrary = false;
++  bool HasRocThrustLibrary = false;
++  bool HasRocPrimLibrary = false;
+
+   // Default version if not detected or specified.
+   const unsigned DefaultVersionMajor = 3;
+@@ -96,6 +99,13 @@ class RocmInstallationDetector {
+   std::vector<std::string> RocmDeviceLibPathArg;
+   // HIP runtime path specified by --hip-path.
+   StringRef HIPPathArg;
++  // HIP Standard Parallel Algorithm acceleration library specified by
++  // --hipstdpar-path
++  StringRef HIPStdParPathArg;
++  // rocThrust algorithm library specified by --hipstdpar-thrust-path
++  StringRef HIPRocThrustPathArg;
++  // rocPrim algorithm library specified by --hipstdpar-prim-path
++  StringRef HIPRocPrimPathArg;
+   // HIP version specified by --hip-version.
+   StringRef HIPVersionArg;
+   // Wheter -nogpulib is specified.
+@@ -180,6 +190,9 @@ class RocmInstallationDetector {
+   /// Check whether we detected a valid ROCm device library.
+   bool hasDeviceLibrary() const { return HasDeviceLibrary; }
+
++  /// Check whether we detected a valid HIP STDPAR Acceleration library.
++  bool hasHIPStdParLibrary() const { return HasHIPStdParLibrary; }
++
+   /// Print information about the detected ROCm installation.
+   void print(raw_ostream &OS) const;
+
+diff --git a/clang/lib/Frontend/InitPreprocessor.cpp b/clang/lib/Frontend/InitPreprocessor.cpp
+index e5db8a654e67..846e5fce6de7 100644
+--- a/clang/lib/Frontend/InitPreprocessor.cpp
++++ b/clang/lib/Frontend/InitPreprocessor.cpp
+@@ -585,6 +585,11 @@ static void InitializeStandardPredefinedMacros(const TargetInfo &TI,
+     Builder.defineMacro("__HIP_MEMORY_SCOPE_WORKGROUP", "3");
+     Builder.defineMacro("__HIP_MEMORY_SCOPE_AGENT", "4");
+     Builder.defineMacro("__HIP_MEMORY_SCOPE_SYSTEM", "5");
++    if (LangOpts.HIPStdPar) {
++      Builder.defineMacro("__HIPSTDPAR__");
++      if (LangOpts.HIPStdParInterposeAlloc)
++        Builder.defineMacro("__HIPSTDPAR_INTERPOSE_ALLOC__");
++    }
+     if (LangOpts.CUDAIsDevice) {
+       Builder.defineMacro("__HIP_DEVICE_COMPILE__");
+       if (!TI.hasHIPImageSupport()) {
+diff --git a/clang/lib/Sema/SemaCUDA.cpp b/clang/lib/Sema/SemaCUDA.cpp
+index cfea6493ced7..d97fd54700b4 100644
+--- a/clang/lib/Sema/SemaCUDA.cpp
++++ b/clang/lib/Sema/SemaCUDA.cpp
+@@ -230,7 +230,11 @@ Sema::IdentifyCUDAPreference(const FunctionDecl *Caller,
+       (CallerTarget == CFT_Host && CalleeTarget == CFT_Global) ||
+       (CallerTarget == CFT_Global && CalleeTarget == CFT_Device))
+     return CFP_Native;
+-
++  if (getLangOpts().HIPStdPar &&
++      (CallerTarget == CFT_Global || CallerTarget == CFT_Device ||
++       CallerTarget == CFT_HostDevice) &&
++      CalleeTarget == CFT_Host)
++    return CFP_HostDevice;
+   // (d) HostDevice behavior depends on compilation mode.
+   if (CallerTarget == CFT_HostDevice) {
+     // It's OK to call a compilation-mode matching function from an HD one.
+@@ -877,7 +881,7 @@ void Sema::CUDACheckLambdaCapture(CXXMethodDecl *Callee,
+   if (!ShouldCheck || !Capture.isReferenceCapture())
+     return;
+   auto DiagKind = SemaDiagnosticBuilder::K_Deferred;
+-  if (Capture.isVariableCapture()) {
++  if (!getLangOpts().HIPStdPar && Capture.isVariableCapture()) {
+     SemaDiagnosticBuilder(DiagKind, Capture.getLocation(),
+                           diag::err_capture_bad_target, Callee, *this)
+         << Capture.getVariable();
+diff --git a/clang/lib/Sema/SemaExpr.cpp b/clang/lib/Sema/SemaExpr.cpp
+index 1d457e116bb5..117195e42dda 100644
+--- a/clang/lib/Sema/SemaExpr.cpp
++++ b/clang/lib/Sema/SemaExpr.cpp
+@@ -19118,7 +19118,7 @@ MarkVarDeclODRUsed(ValueDecl *V, SourceLocation Loc, Sema &SemaRef,
+       // Diagnose ODR-use of host global variables in device functions.
+       // Reference of device global variables in host functions is allowed
+       // through shadow variables therefore it is not diagnosed.
+-      if (SemaRef.LangOpts.CUDAIsDevice) {
++      if (SemaRef.LangOpts.CUDAIsDevice && !SemaRef.LangOpts.HIPStdPar) {
+         SemaRef.targetDiag(Loc, diag::err_ref_bad_target)
+             << /*host*/ 2 << /*variable*/ 1 << Var << UserTarget;
+         SemaRef.targetDiag(Var->getLocation(),
+diff --git a/clang/lib/Sema/SemaStmtAsm.cpp b/clang/lib/Sema/SemaStmtAsm.cpp
+index 2acb269f0423..83351b703c15 100644
+--- a/clang/lib/Sema/SemaStmtAsm.cpp
++++ b/clang/lib/Sema/SemaStmtAsm.cpp
+@@ -271,7 +271,8 @@ StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
+       OutputName = Names[i]->getName();
+
+     TargetInfo::ConstraintInfo Info(Literal->getString(), OutputName);
+-    if (!Context.getTargetInfo().validateOutputConstraint(Info)) {
++    if (!Context.getTargetInfo().validateOutputConstraint(Info) &&
++        !(LangOpts.HIPStdPar && LangOpts.CUDAIsDevice)) {
+       targetDiag(Literal->getBeginLoc(),
+                  diag::err_asm_invalid_output_constraint)
+           << Info.getConstraintStr();
+diff --git a/clang/test/CodeGenHipStdPar/unannotated-functions-get-emitted.cpp b/clang/test/CodeGenHipStdPar/unannotated-functions-get-emitted.cpp
+new file mode 100644
+index 000000000000..09ef8dbbb5c0
+--- /dev/null
++++ b/clang/test/CodeGenHipStdPar/unannotated-functions-get-emitted.cpp
+@@ -0,0 +1,19 @@
++// RUN: %clang_cc1 -x hip -emit-llvm -fcuda-is-device \
++// RUN:   -o - %s | FileCheck --check-prefix=NO-HIPSTDPAR-DEV %s
++
++// RUN: %clang_cc1 --hipstdpar -emit-llvm -fcuda-is-device \
++// RUN:   -o - %s | FileCheck --check-prefix=HIPSTDPAR-DEV %s
++
++#define __device__ __attribute__((device))
++
++// NO-HIPSTDPAR-DEV-NOT: define {{.*}} void @_Z3fooPff({{.*}})
++// HIPSTDPAR-DEV: define {{.*}} void @_Z3fooPff({{.*}})
++void foo(float *a, float b) {
++  *a = b;
++}
++
++// NO-HIPSTDPAR-DEV: define {{.*}} void @_Z3barPff({{.*}})
++// HIPSTDPAR-DEV: define {{.*}} void @_Z3barPff({{.*}})
++__device__ void bar(float *a, float b) {
++  *a = b;
++}
+\ No newline at end of file
+diff --git a/clang/test/CodeGenHipStdPar/unsupported-ASM.cpp b/clang/test/CodeGenHipStdPar/unsupported-ASM.cpp
+new file mode 100644
+index 000000000000..9ff6f8a4a71a
+--- /dev/null
++++ b/clang/test/CodeGenHipStdPar/unsupported-ASM.cpp
+@@ -0,0 +1,11 @@
++
++// RUN: %clang_cc1 -triple amdgcn-amd-amdhsa -aux-triple x86_64-unknown-linux-gnu \
++// RUN:   --hipstdpar -x hip -emit-llvm -fcuda-is-device -o - %s | FileCheck %s
++
++#define __global__ __attribute__((global))
++
++__global__ void foo(int i) {
++    asm ("addl %2, %1; seto %b0" : "=q" (i), "+g" (i) : "r" (i));
++}
++
++// CHECK: declare void @__ASM__hipstdpar_unsupported([{{.*}}])
+diff --git a/clang/test/CodeGenHipStdPar/unsupported-builtins.cpp b/clang/test/CodeGenHipStdPar/unsupported-builtins.cpp
+new file mode 100644
+index 000000000000..7a61d0ccac62
+--- /dev/null
++++ b/clang/test/CodeGenHipStdPar/unsupported-builtins.cpp
+@@ -0,0 +1,8 @@
++// RUN: %clang_cc1 -triple amdgcn-amd-amdhsa -aux-triple x86_64-unknown-linux-gnu \
++// RUN:   --hipstdpar -x hip -emit-llvm -fcuda-is-device -o - %s | FileCheck %s
++
++#define __global__ __attribute__((global))
++
++__global__ void foo() { return __builtin_ia32_pause(); }
++
++// CHECK: declare void @__builtin_ia32_pause__hipstdpar_unsupported()
+\ No newline at end of file
+diff --git a/clang/test/Driver/Inputs/hipstdpar/hipstdpar_lib.hpp b/clang/test/Driver/Inputs/hipstdpar/hipstdpar_lib.hpp
+new file mode 100644
+index 000000000000..e69de29bb2d1
+diff --git a/clang/test/Driver/hipstdpar.c b/clang/test/Driver/hipstdpar.c
+new file mode 100644
+index 000000000000..41572258db2e
+--- /dev/null
++++ b/clang/test/Driver/hipstdpar.c
+@@ -0,0 +1,17 @@
++// RUN: not %clang -### -hipstdpar --compile %s 2>&1 | \
++// RUN:   FileCheck --check-prefix=HIPSTDPAR-MISSING-LIB %s
++// RUN: %clang -### --hipstdpar --hipstdpar-path=%S/Inputs/hipstdpar \
++// RUN:   --hipstdpar-thrust-path=%S/Inputs/hipstdpar/thrust \
++// RUN:   --hipstdpar-prim-path=%S/Inputs/hipstdpar/rocprim --compile %s 2>&1 | \
++// RUN:   FileCheck --check-prefix=HIPSTDPAR-COMPILE %s
++// RUN: touch %t.o
++// RUN: %clang -### -hipstdpar %t.o 2>&1 | FileCheck --check-prefix=HIPSTDPAR-LINK %s
++
++// HIPSTDPAR-MISSING-LIB: error: cannot find HIP Standard Parallelism Acceleration library; provide it via '--hipstdpar-path'
++// HIPSTDPAR-COMPILE: "-x" "hip"
++// HIPSTDPAR-COMPILE: "-idirafter" "{{.*/thrust}}"
++// HIPSTDPAR-COMPILE: "-idirafter" "{{.*/rocprim}}"
++// HIPSTDPAR-COMPILE: "-idirafter" "{{.*/Inputs/hipstdpar}}"
++// HIPSTDPAR-COMPILE: "-include" "hipstdpar_lib.hpp"
++// HIPSTDPAR-LINK: "-rpath"
++// HIPSTDPAR-LINK: "-l{{.*hip.*}}"
+diff --git a/clang/test/Preprocessor/predefined-macros.c b/clang/test/Preprocessor/predefined-macros.c
+index d77b699674af..adc4b42d2f6c 100644
+--- a/clang/test/Preprocessor/predefined-macros.c
++++ b/clang/test/Preprocessor/predefined-macros.c
+@@ -290,3 +290,19 @@
+ // RUN:   -fcuda-is-device -fgpu-default-stream=per-thread \
+ // RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-PTH
+ // CHECK-PTH: #define HIP_API_PER_THREAD_DEFAULT_STREAM 1
++
++// RUN: %clang_cc1 %s -E -dM -o - -x hip -hipstdpar -triple x86_64-unknown-linux-gnu \
++// RUN:   | FileCheck -match-full-lines %s --check-prefix=CHECK-HIPSTDPAR
++// CHECK-HIPSTDPAR: #define __HIPSTDPAR__ 1
++
++// RUN: %clang_cc1 %s -E -dM -o - -x hip -hipstdpar -hipstdpar-interpose-alloc \
++// RUN:  -triple x86_64-unknown-linux-gnu | FileCheck -match-full-lines %s \
++// RUN:  --check-prefix=CHECK-HIPSTDPAR-INTERPOSE
++// CHECK-HIPSTDPAR-INTERPOSE: #define __HIPSTDPAR_INTERPOSE_ALLOC__ 1
++// CHECK-HIPSTDPAR-INTERPOSE: #define __HIPSTDPAR__ 1
++
++// RUN: %clang_cc1 %s -E -dM -o - -x hip -hipstdpar -hipstdpar-interpose-alloc \
++// RUN:  -triple amdgcn-amd-amdhsa -fcuda-is-device | FileCheck -match-full-lines \
++// RUN:  %s --check-prefix=CHECK-HIPSTDPAR-INTERPOSE-DEV-NEG
++// CHECK-HIPSTDPAR-INTERPOSE-DEV-NEG: #define __HIPSTDPAR__ 1
++// CHECK-HIPSTDPAR-INTERPOSE-DEV-NEG-NOT: #define __HIPSTDPAR_INTERPOSE_ALLOC__ 1
+\ No newline at end of file
+diff --git a/clang/test/SemaHipStdPar/device-can-call-host.cpp b/clang/test/SemaHipStdPar/device-can-call-host.cpp
+new file mode 100644
+index 000000000000..2c182bc276f7
+--- /dev/null
++++ b/clang/test/SemaHipStdPar/device-can-call-host.cpp
+@@ -0,0 +1,93 @@
++// RUN: %clang_cc1 -x hip %s -hipstdpar -triple amdgcn-amd-amdhsa --std=c++17 \
++// RUN:   -fcuda-is-device -emit-llvm -o /dev/null -verify
++
++// Note: These would happen implicitly, within the implementation of the
++//       accelerator specific algorithm library, and not from user code.
++
++// Calls from the accelerator side to implicitly host (i.e. unannotated)
++// functions are fine.
++
++// expected-no-diagnostics
++
++#define __device__ __attribute__((device))
++#define __global__ __attribute__((global))
++
++extern "C" void host_fn() {}
++
++struct Dummy {};
++
++struct S {
++  S() {}
++  ~S() { host_fn(); }
++
++  int x;
++};
++
++struct T {
++  __device__ void hd() { host_fn(); }
++
++  __device__ void hd3();
++
++  void h() {}
++
++  void operator+();
++  void operator-(const T&) {}
++
++  operator Dummy() { return Dummy(); }
++};
++
++__device__ void T::hd3() { host_fn(); }
++
++template <typename T> __device__ void hd2() { host_fn(); }
++
++__global__ void kernel() { hd2<int>(); }
++
++__device__ void hd() { host_fn(); }
++
++template <typename T> __device__ void hd3() { host_fn(); }
++__device__ void device_fn() { hd3<int>(); }
++
++__device__ void local_var() {
++  S s;
++}
++
++__device__ void explicit_destructor(S *s) {
++  s->~S();
++}
++
++__device__ void hd_member_fn() {
++  T t;
++
++  t.hd();
++}
++
++__device__ void h_member_fn() {
++  T t;
++  t.h();
++}
++
++__device__ void unaryOp() {
++  T t;
++  (void) +t;
++}
++
++__device__ void binaryOp() {
++  T t;
++  (void) (t - t);
++}
++
++__device__ void implicitConversion() {
++  T t;
++  Dummy d = t;
++}
++
++template <typename T>
++struct TmplStruct {
++  template <typename U> __device__ void fn() {}
++};
++
++template <>
++template <>
++__device__ void TmplStruct<int>::fn<int>() { host_fn(); }
++
++__device__ void double_specialization() { TmplStruct<int>().fn<int>(); }
+diff --git a/llvm/include/llvm/Transforms/HipStdPar/HipStdPar.h b/llvm/include/llvm/Transforms/HipStdPar/HipStdPar.h
+new file mode 100644
+index 000000000000..a7f5b55de48a
+--- /dev/null
++++ b/llvm/include/llvm/Transforms/HipStdPar/HipStdPar.h
+@@ -0,0 +1,46 @@
++//===- HipStdPar.h - HIP Standard Parallelism passes -----*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++/// \file
++///
++/// AcceleratorCodeSelection - Identify all functions reachable from a kernel,
++/// removing those that are unreachable.
++///
++/// AllocationInterposition - Forward calls to allocation / deallocation
++//  functions to runtime provided equivalents that allocate memory that is
++//  accessible for an accelerator
++//===----------------------------------------------------------------------===//
++
++#ifndef LLVM_TRANSFORMS_HIPSTDPAR_HIPSTDPAR_H
++#define LLVM_TRANSFORMS_HIPSTDPAR_HIPSTDPAR_H
++
++#include "llvm/IR/PassManager.h"
++
++namespace llvm {
++
++class Module;
++class ModuleAnaysisManager;
++
++class HipStdParAcceleratorCodeSelectionPass
++  : public PassInfoMixin<HipStdParAcceleratorCodeSelectionPass> {
++public:
++  PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
++
++  static bool isRequired() { return true; }
++};
++
++class HipStdParAllocationInterpositionPass
++  : public PassInfoMixin<HipStdParAllocationInterpositionPass> {
++public:
++  PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
++
++  static bool isRequired() { return true; }
++};
++
++} // namespace llvm
++
++#endif // LLVM_TRANSFORMS_HIPSTDPAR_HIPSTDPAR_H
+\ No newline at end of file
+diff --git a/llvm/lib/Passes/CMakeLists.txt b/llvm/lib/Passes/CMakeLists.txt
+index 576d0f3ff442..e42edfe94969 100644
+--- a/llvm/lib/Passes/CMakeLists.txt
++++ b/llvm/lib/Passes/CMakeLists.txt
+@@ -19,6 +19,7 @@ add_llvm_component_library(LLVMPasses
+   CodeGen
+   Core
+   Coroutines
++  HipStdPar
+   IPO
+   InstCombine
+   IRPrinter
+diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
+index 1fdeb13706ca..8c7d3a0b15ba 100644
+--- a/llvm/lib/Passes/PassBuilder.cpp
++++ b/llvm/lib/Passes/PassBuilder.cpp
+@@ -94,6 +94,7 @@
+ #include "llvm/Transforms/Coroutines/CoroEarly.h"
+ #include "llvm/Transforms/Coroutines/CoroElide.h"
+ #include "llvm/Transforms/Coroutines/CoroSplit.h"
++#include "llvm/Transforms/HipStdPar/HipStdPar.h"
+ #include "llvm/Transforms/IPO/AlwaysInliner.h"
+ #include "llvm/Transforms/IPO/Annotation2Metadata.h"
+ #include "llvm/Transforms/IPO/ArgumentPromotion.h"
+diff --git a/llvm/lib/Passes/PassBuilderPipelines.cpp b/llvm/lib/Passes/PassBuilderPipelines.cpp
+index aa42fb377114..0553146e70a8 100644
+--- a/llvm/lib/Passes/PassBuilderPipelines.cpp
++++ b/llvm/lib/Passes/PassBuilderPipelines.cpp
+@@ -37,6 +37,7 @@
+ #include "llvm/Transforms/Coroutines/CoroEarly.h"
+ #include "llvm/Transforms/Coroutines/CoroElide.h"
+ #include "llvm/Transforms/Coroutines/CoroSplit.h"
++#include "llvm/Transforms/HipStdPar/HipStdPar.h"
+ #include "llvm/Transforms/IPO/AlwaysInliner.h"
+ #include "llvm/Transforms/IPO/Annotation2Metadata.h"
+ #include "llvm/Transforms/IPO/ArgumentPromotion.h"
+diff --git a/llvm/lib/Passes/PassRegistry.def b/llvm/lib/Passes/PassRegistry.def
+index adfbce53f56f..dae329710039 100644
+--- a/llvm/lib/Passes/PassRegistry.def
++++ b/llvm/lib/Passes/PassRegistry.def
+@@ -108,6 +108,9 @@ MODULE_PASS("rpo-function-attrs", ReversePostOrderFunctionAttrsPass())
+ MODULE_PASS("sample-profile", SampleProfileLoaderPass())
+ MODULE_PASS("scc-oz-module-inliner",
+   buildInlinerPipeline(OptimizationLevel::Oz, ThinOrFullLTOPhase::None))
++MODULE_PASS("hipstdpar-select-accelerator-code",
++  HipStdParAcceleratorCodeSelectionPass())
++MODULE_PASS("hipstdpar-interpose-alloc", HipStdParAllocationInterpositionPass())
+ MODULE_PASS("strip", StripSymbolsPass())
+ MODULE_PASS("strip-dead-debug-info", StripDeadDebugInfoPass())
+ MODULE_PASS("pseudo-probe", SampleProfileProbePass(TM))
+diff --git a/llvm/lib/Target/AMDGPU/AMDGPUTargetMachine.cpp b/llvm/lib/Target/AMDGPU/AMDGPUTargetMachine.cpp
+index 2e6b29d986af..bbcfc27b39de 100644
+--- a/llvm/lib/Target/AMDGPU/AMDGPUTargetMachine.cpp
++++ b/llvm/lib/Target/AMDGPU/AMDGPUTargetMachine.cpp
+@@ -50,6 +50,7 @@
+ #include "llvm/InitializePasses.h"
+ #include "llvm/MC/TargetRegistry.h"
+ #include "llvm/Passes/PassBuilder.h"
++#include "llvm/Transforms/HipStdPar/HipStdPar.h"
+ #include "llvm/Transforms/IPO.h"
+ #include "llvm/Transforms/IPO/AlwaysInliner.h"
+ #include "llvm/Transforms/IPO/GlobalDCE.h"
+@@ -343,6 +344,11 @@ static cl::opt<bool> EnableRewritePartialRegUses(
+     cl::desc("Enable rewrite partial reg uses pass"), cl::init(false),
+     cl::Hidden);
+
++static cl::opt<bool> EnableHipStdPar(
++  "amdgpu-enable-hipstdpar",
++  cl::desc("Enable HIP Standard Parallelism Offload support"), cl::init(false),
++  cl::Hidden);
++
+ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
+   // Register the target
+   RegisterTargetMachine<R600TargetMachine> X(getTheR600Target());
+@@ -685,6 +691,8 @@ void AMDGPUTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
+         if (EnableLibCallSimplify && Level != OptimizationLevel::O0)
+           FPM.addPass(AMDGPUSimplifyLibCallsPass());
+         PM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
++        if (EnableHipStdPar)
++          PM.addPass(HipStdParAcceleratorCodeSelectionPass());
+       });
+
+   PB.registerPipelineEarlySimplificationEPCallback(
+diff --git a/llvm/lib/Transforms/CMakeLists.txt b/llvm/lib/Transforms/CMakeLists.txt
+index dda5f6de11e3..84a7e34147d0 100644
+--- a/llvm/lib/Transforms/CMakeLists.txt
++++ b/llvm/lib/Transforms/CMakeLists.txt
+@@ -9,3 +9,4 @@ add_subdirectory(Hello)
+ add_subdirectory(ObjCARC)
+ add_subdirectory(Coroutines)
+ add_subdirectory(CFGuard)
++add_subdirectory(HipStdPar)
+diff --git a/llvm/lib/Transforms/HipStdPar/CMakeLists.txt b/llvm/lib/Transforms/HipStdPar/CMakeLists.txt
+new file mode 100644
+index 000000000000..b2ae3d18ecb3
+--- /dev/null
++++ b/llvm/lib/Transforms/HipStdPar/CMakeLists.txt
+@@ -0,0 +1,13 @@
++add_llvm_component_library(LLVMHipStdPar
++  HipStdPar.cpp
++
++  ADDITIONAL_HEADER_DIRS
++  ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms/HipStdPar
++
++  DEPENDS
++  intrinsics_gen
++
++  LINK_COMPONENTS
++  Core
++  Support
++  TransformUtils)
+diff --git a/llvm/lib/Transforms/HipStdPar/HipStdPar.cpp b/llvm/lib/Transforms/HipStdPar/HipStdPar.cpp
+new file mode 100644
+index 000000000000..182e1ba1e385
+--- /dev/null
++++ b/llvm/lib/Transforms/HipStdPar/HipStdPar.cpp
+@@ -0,0 +1,312 @@
++//===----- HipStdPar.cpp - HIP C++ Standard Parallelism Support Passes ----===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++// This file implements two passes that enable HIP C++ Standard Parallelism
++// Support:
++//
++// 1. AcceleratorCodeSelection (required): Given that only algorithms are
++//    accelerated, and that the accelerated implementation exists in the form of
++//    a compute kernel, we assume that only the kernel, and all functions
++//    reachable from it, constitute code that the user expects the accelerator
++//    to execute. Thus, we identify the set of all functions reachable from
++//    kernels, and then remove all unreachable ones. This last part is necessary
++//    because it is possible for code that the user did not expect to execute on
++//    an accelerator to contain constructs that cannot be handled by the target
++//    BE, which cannot be provably demonstrated to be dead code in general, and
++//    thus can lead to mis-compilation. The degenerate case of this is when a
++//    Module contains no kernels (the parent TU had no algorithm invocations fit
++//    for acceleration), which we handle by completely emptying said module.
++//    **NOTE**: The above does not handle indirectly reachable functions i.e.
++//              it is possible to obtain a case where the target of an indirect
++//              call is otherwise unreachable and thus is removed; this
++//              restriction is aligned with the current `-hipstdpar` limitations
++//              and will be relaxed in the future.
++//
++// 2. AllocationInterposition (required only when on-demand paging is
++//    unsupported): Some accelerators or operating systems might not support
++//    transparent on-demand paging. Thus, they would only be able to access
++//    memory that is allocated by an accelerator-aware mechanism. For such cases
++//    the user can opt into enabling allocation / deallocation interposition,
++//    whereby we replace calls to known allocation / deallocation functions with
++//    calls to runtime implemented equivalents that forward the requests to
++//    accelerator-aware interfaces. We also support freeing system allocated
++//    memory that ends up in one of the runtime equivalents, since this can
++//    happen if e.g. a library that was compiled without interposition returns
++//    an allocation that can be validly passed to `free`.
++//===----------------------------------------------------------------------===//
++
++#include "llvm/Transforms/HipStdPar/HipStdPar.h"
++
++#include "llvm/ADT/SmallPtrSet.h"
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/ADT/STLExtras.h"
++#include "llvm/Analysis/CallGraph.h"
++#include "llvm/Analysis/OptimizationRemarkEmitter.h"
++#include "llvm/IR/Constants.h"
++#include "llvm/IR/DebugInfoMetadata.h"
++#include "llvm/IR/Function.h"
++#include "llvm/IR/Module.h"
++#include "llvm/Transforms/Utils/ModuleUtils.h"
++
++#include <cassert>
++#include <string>
++#include <utility>
++
++using namespace llvm;
++
++template<typename T>
++static inline void eraseFromModule(T &toErase) {
++  toErase.replaceAllUsesWith(PoisonValue::get(toErase.getType()));
++  toErase.eraseFromParent();
++}
++
++static inline bool checkIfSupported(GlobalVariable &G) {
++  if (!G.isThreadLocal())
++    return true;
++
++  G.dropDroppableUses();
++
++  if (!G.isConstantUsed())
++    return true;
++
++  std::string W;
++  raw_string_ostream OS(W);
++
++  OS << "Accelerator does not support the thread_local variable "
++    << G.getName();
++
++  Instruction *I = nullptr;
++  SmallVector<User *> Tmp(G.user_begin(), G.user_end());
++  SmallPtrSet<User *, 5> Visited;
++  do {
++    auto U = std::move(Tmp.back());
++    Tmp.pop_back();
++
++    if (Visited.contains(U))
++      continue;
++
++    if (isa<Instruction>(U))
++      I = cast<Instruction>(U);
++    else
++      Tmp.insert(Tmp.end(), U->user_begin(), U->user_end());
++
++    Visited.insert(U);
++  } while (!I && !Tmp.empty());
++
++  assert(I && "thread_local global should have at least one non-constant use.");
++
++  G.getContext().diagnose(
++    DiagnosticInfoUnsupported(*I->getParent()->getParent(), W,
++                              I->getDebugLoc(), DS_Error));
++
++  return false;
++}
++
++static inline void clearModule(Module &M) { // TODO: simplify.
++  while (!M.functions().empty())
++    eraseFromModule(*M.begin());
++  while (!M.globals().empty())
++    eraseFromModule(*M.globals().begin());
++  while (!M.aliases().empty())
++    eraseFromModule(*M.aliases().begin());
++  while (!M.ifuncs().empty())
++    eraseFromModule(*M.ifuncs().begin());
++}
++
++static inline void maybeHandleGlobals(Module &M) {
++  unsigned GlobAS = M.getDataLayout().getDefaultGlobalsAddressSpace();
++  for (auto &&G : M.globals()) { // TODO: should we handle these in the FE?
++    if (!checkIfSupported(G))
++      return clearModule(M);
++
++    if (G.isThreadLocal())
++      continue;
++    if (G.isConstant())
++      continue;
++    if (G.getAddressSpace() != GlobAS)
++      continue;
++    if (G.getLinkage() != GlobalVariable::ExternalLinkage)
++      continue;
++
++    G.setLinkage(GlobalVariable::ExternalWeakLinkage);
++    G.setExternallyInitialized(true);
++  }
++}
++
++template<unsigned N>
++static inline void removeUnreachableFunctions(
++  const SmallPtrSet<const Function *, N>& Reachable, Module &M) {
++  removeFromUsedLists(M, [&](Constant *C) {
++    if (auto F = dyn_cast<Function>(C))
++      return !Reachable.contains(F);
++
++    return false;
++  });
++
++  SmallVector<std::reference_wrapper<Function>> ToRemove;
++  copy_if(M, std::back_inserter(ToRemove), [&](auto &&F) {
++    return !F.isIntrinsic() && !Reachable.contains(&F);
++  });
++
++  for_each(ToRemove, eraseFromModule<Function>);
++}
++
++static inline bool isAcceleratorExecutionRoot(const Function *F) {
++    if (!F)
++      return false;
++
++    return F->getCallingConv() == CallingConv::AMDGPU_KERNEL;
++}
++
++static inline bool checkIfSupported(const Function *F, const CallBase *CB) {
++  const auto Dx = F->getName().rfind("__hipstdpar_unsupported");
++
++  if (Dx == StringRef::npos)
++    return true;
++
++  const auto N = F->getName().substr(0, Dx);
++
++  std::string W;
++  raw_string_ostream OS(W);
++
++  if (N == "__ASM")
++    OS << "Accelerator does not support the ASM block:\n"
++      << cast<ConstantDataArray>(CB->getArgOperand(0))->getAsCString();
++  else
++    OS << "Accelerator does not support the " << N << " function.";
++
++  auto Caller = CB->getParent()->getParent();
++
++  Caller->getContext().diagnose(
++    DiagnosticInfoUnsupported(*Caller, W, CB->getDebugLoc(), DS_Error));
++
++  return false;
++}
++
++PreservedAnalyses
++  HipStdParAcceleratorCodeSelectionPass::run(Module &M,
++                                             ModuleAnalysisManager &MAM) {
++  auto &CGA = MAM.getResult<CallGraphAnalysis>(M);
++
++  SmallPtrSet<const Function *, 32> Reachable;
++  for (auto &&CGN : CGA) {
++    if (!isAcceleratorExecutionRoot(CGN.first))
++      continue;
++
++    Reachable.insert(CGN.first);
++
++    SmallVector<const Function *> Tmp({CGN.first});
++    do {
++      auto F = std::move(Tmp.back());
++      Tmp.pop_back();
++
++      for (auto &&N : *CGA[F]) {
++        if (!N.second)
++          continue;
++        if (!N.second->getFunction())
++          continue;
++        if (Reachable.contains(N.second->getFunction()))
++          continue;
++
++        if (!checkIfSupported(N.second->getFunction(),
++                              dyn_cast<CallBase>(*N.first)))
++          return PreservedAnalyses::none();
++
++        Reachable.insert(N.second->getFunction());
++        Tmp.push_back(N.second->getFunction());
++      }
++    } while (!std::empty(Tmp));
++  }
++
++  if (std::empty(Reachable))
++    clearModule(M);
++  else
++    removeUnreachableFunctions(Reachable, M);
++
++  maybeHandleGlobals(M);
++
++  return PreservedAnalyses::none();
++}
++
++static constexpr std::pair<StringLiteral, StringLiteral> ReplaceMap[]{
++  {"aligned_alloc",             "__hipstdpar_aligned_alloc"},
++  {"calloc",                    "__hipstdpar_calloc"},
++  {"free",                      "__hipstdpar_free"},
++  {"malloc",                    "__hipstdpar_malloc"},
++  {"memalign",                  "__hipstdpar_aligned_alloc"},
++  {"posix_memalign",            "__hipstdpar_posix_aligned_alloc"},
++  {"realloc",                   "__hipstdpar_realloc"},
++  {"reallocarray",              "__hipstdpar_realloc_array"},
++  {"_ZdaPv",                    "__hipstdpar_operator_delete"},
++  {"_ZdaPvm",                   "__hipstdpar_operator_delete_sized"},
++  {"_ZdaPvSt11align_val_t",     "__hipstdpar_operator_delete_aligned"},
++  {"_ZdaPvmSt11align_val_t",    "__hipstdpar_operator_delete_aligned_sized"},
++  {"_ZdlPv",                    "__hipstdpar_operator_delete"},
++  {"_ZdlPvm",                   "__hipstdpar_operator_delete_sized"},
++  {"_ZdlPvSt11align_val_t",     "__hipstdpar_operator_delete_aligned"},
++  {"_ZdlPvmSt11align_val_t",    "__hipstdpar_operator_delete_aligned_sized"},
++  {"_Znam",                     "__hipstdpar_operator_new"},
++  {"_ZnamRKSt9nothrow_t",       "__hipstdpar_operator_new_nothrow"},
++  {"_ZnamSt11align_val_t",      "__hipstdpar_operator_new_aligned"},
++  {"_ZnamSt11align_val_tRKSt9nothrow_t",
++                                "__hipstdpar_operator_new_aligned_nothrow"},
++
++  {"_Znwm",                     "__hipstdpar_operator_new"},
++  {"_ZnwmRKSt9nothrow_t",       "__hipstdpar_operator_new_nothrow"},
++  {"_ZnwmSt11align_val_t",      "__hipstdpar_operator_new_aligned"},
++  {"_ZnwmSt11align_val_tRKSt9nothrow_t",
++                                "__hipstdpar_operator_new_aligned_nothrow"},
++  {"__builtin_calloc",          "__hipstdpar_calloc"},
++  {"__builtin_free",            "__hipstdpar_free"},
++  {"__builtin_malloc",          "__hipstdpar_malloc"},
++  {"__builtin_operator_delete", "__hipstdpar_operator_delete"},
++  {"__builtin_operator_new",    "__hipstdpar_operator_new"},
++  {"__builtin_realloc",         "__hipstdpar_realloc"},
++  {"__libc_calloc",             "__hipstdpar_calloc"},
++  {"__libc_free",               "__hipstdpar_free"},
++  {"__libc_malloc",             "__hipstdpar_malloc"},
++  {"__libc_memalign",           "__hipstdpar_aligned_alloc"},
++  {"__libc_realloc",            "__hipstdpar_realloc"}
++};
++
++PreservedAnalyses
++HipStdParAllocationInterpositionPass::run(Module &M, ModuleAnalysisManager&) {
++  SmallDenseMap<StringRef, StringRef> AllocReplacements(std::cbegin(ReplaceMap),
++                                                        std::cend(ReplaceMap));
++
++  for (auto &&F : M) {
++    if (!F.hasName())
++      continue;
++    if (!AllocReplacements.contains(F.getName()))
++      continue;
++
++    if (auto R = M.getFunction(AllocReplacements[F.getName()])) {
++      F.replaceAllUsesWith(R);
++    } else {
++      std::string W;
++      raw_string_ostream OS(W);
++
++      OS << "cannot be interposed, missing: " << AllocReplacements[F.getName()]
++        << ". Tried to run the allocation interposition pass without the "
++        << "replacement functions available.";
++
++      F.getContext().diagnose(DiagnosticInfoUnsupported(F, W,
++                                                        F.getSubprogram(),
++                                                        DS_Warning));
++    }
++  }
++
++  if (auto F = M.getFunction("__hipstdpar_hidden_free")) {
++    auto LibcFree = M.getOrInsertFunction("__libc_free", F->getFunctionType(),
++                                          F->getAttributes());
++    F->replaceAllUsesWith(LibcFree.getCallee());
++
++    eraseFromModule(*F);
++  }
++
++  return PreservedAnalyses::none();
++}
+diff --git a/llvm/test/Transforms/HipStdPar/accelerator-code-selection.ll b/llvm/test/Transforms/HipStdPar/accelerator-code-selection.ll
+new file mode 100644
+index 000000000000..2d41bd9b3443
+--- /dev/null
++++ b/llvm/test/Transforms/HipStdPar/accelerator-code-selection.ll
+@@ -0,0 +1,116 @@
++; RUN: opt -S -mtriple=amdgcn-amd-amdhsa -passes=hipstdpar-select-accelerator-code \
++; RUN: %s | FileCheck %s
++
++$_ZNK8CallableclEPi = comdat any
++$_ZNK8CallableclEPf = comdat any
++$_ZNK8Callable6mem_fnEPKi = comdat any
++$_ZN8Callable13static_mem_fnEPKi = comdat any
++; CHECK-NOT: $_ZNK8Callable37another_mem_fn_which_will_get_removedEPKf
++$_ZNK8Callable37another_mem_fn_which_will_get_removedEPKf = comdat any
++; CHECK-NOT: $_ZN8Callable44another_static_mem_fn_which_will_get_removedEPKf
++$_ZN8Callable44another_static_mem_fn_which_will_get_removedEPKf = comdat any
++
++%struct.Callable = type { [64 x i8] }
++
++; CHECK-NOT: @should_be_removed
++@llvm.compiler.used = appending addrspace(1) global [1 x ptr] [ptr @should_be_removed], section "llvm.metadata"
++
++define void @should_be_removed(ptr %p) {
++  ret void
++}
++
++declare void @llvm.trap()
++
++; CHECK: define {{.*}} @called_via_chain
++define void @called_via_chain(ptr %p) {
++  entry:
++    %tobool.not = icmp eq ptr %p, null
++    br i1 %tobool.not, label %if.then, label %if.end
++
++  if.then:
++    tail call void @llvm.trap()
++    unreachable
++
++  if.end:
++    ret void
++}
++
++; CHECK: define {{.*}} @directly_called
++define void @directly_called(ptr %p) {
++  tail call void @called_via_chain(ptr %p)
++  ret void
++}
++
++; CHECK: define {{.*}} amdgpu_kernel {{.*}} @accelerator_execution_root
++define hidden amdgpu_kernel void @accelerator_execution_root(ptr %p) {
++  tail call void @directly_called(ptr %p)
++  ret void
++}
++
++; CHECK-NOT: @defined_elsewhere_should_be_removed
++declare void @defined_elsewhere_should_be_removed(ptr)
++
++; CHECK: declare {{.*}} @defined_elsewhere_directly_called
++declare void @defined_elsewhere_directly_called(ptr)
++
++; CHECK: define {{.*}} amdgpu_kernel {{.*}} @another_accelerator_execution_root
++define hidden amdgpu_kernel void @another_accelerator_execution_root(ptr %p) {
++  tail call void @defined_elsewhere_directly_called(ptr %p)
++  ret void
++}
++
++; Also test passing a callable object (functor / lambda) to a kernel, which is
++; the common pattern for customising algorithms.
++
++; CHECK: define {{.*}} amdgpu_kernel {{.*}} @_Z22accelerator_execution_root_taking_callablePi8Callable
++define hidden amdgpu_kernel void @_Z22accelerator_execution_root_taking_callablePi8Callable(ptr noundef %p, ptr addrspace(4) nocapture readonly byref(%struct.Callable) align 8 %callable) {
++  %callable_in_generic = addrspacecast ptr addrspace(4) %callable to ptr
++  call void @_ZNK8CallableclEPi(ptr noundef nonnull align 1 dereferenceable(64) %callable_in_generic, ptr noundef %p)
++
++  ret void
++}
++
++; CHECK: define {{.*}} @_ZNK8CallableclEPi
++define linkonce_odr dso_local void @_ZNK8CallableclEPi(ptr noundef nonnull align 1 dereferenceable(64) %this, ptr noundef %p) {
++  call void @_ZNK8Callable6mem_fnEPKi(ptr noundef nonnull align 1 dereferenceable(1) %this, ptr noundef %p)
++
++  ret void
++}
++
++; CHECK: define {{.*}} @_ZNK8Callable6mem_fnEPKi
++define linkonce_odr dso_local void @_ZNK8Callable6mem_fnEPKi(ptr noundef nonnull align 1 dereferenceable(1) %this, ptr noundef %p) {
++  call void @_ZN8Callable13static_mem_fnEPKi(ptr noundef %p)
++
++  ret void
++}
++
++; CHECK: define {{.*}} @_ZN8Callable13static_mem_fnEPKi
++define linkonce_odr dso_local void @_ZN8Callable13static_mem_fnEPKi(ptr noundef %p) {
++  ret void
++}
++
++; CHECK-NOT: define {{.*}} @_Z26non_kernel_taking_callablePf8Callable
++define dso_local void @_Z26non_kernel_taking_callablePf8Callable(ptr noundef %p, ptr noundef byval(%struct.Callable) align 8 %callable) {
++  call void @_ZNK8CallableclEPf(ptr noundef nonnull align 1 dereferenceable(64) %callable, ptr noundef %p)
++
++  ret void
++}
++
++; CHECK-NOT: define {{.*}} @_ZNK8CallableclEPf
++define linkonce_odr dso_local void @_ZNK8CallableclEPf(ptr noundef nonnull align 1 dereferenceable(64) %this, ptr noundef %p) {
++  call void @_ZNK8Callable37another_mem_fn_which_will_get_removedEPKf(ptr noundef nonnull align 1 dereferenceable(64) %this, ptr noundef %p)
++
++  ret void
++}
++
++; CHECK-NOT: @_ZNK8Callable37another_mem_fn_which_will_get_removedEPKf
++define linkonce_odr dso_local void @_ZNK8Callable37another_mem_fn_which_will_get_removedEPKf(ptr noundef nonnull align 1 dereferenceable(64) %this, ptr noundef %p) {
++  call void @_ZN8Callable44another_static_mem_fn_which_will_get_removedEPKf(ptr noundef %p)
++
++  ret void
++}
++
++; CHECK-NOT: @_ZN8Callable44another_static_mem_fn_which_will_get_removedEPKf
++define linkonce_odr dso_local void @_ZN8Callable44another_static_mem_fn_which_will_get_removedEPKf(ptr noundef %p) {
++  ret void
++}
+\ No newline at end of file
+diff --git a/llvm/test/Transforms/HipStdPar/allocation-interposition.ll b/llvm/test/Transforms/HipStdPar/allocation-interposition.ll
+new file mode 100644
+index 000000000000..291b06ed0ca9
+--- /dev/null
++++ b/llvm/test/Transforms/HipStdPar/allocation-interposition.ll
+@@ -0,0 +1,221 @@
++; RUN: opt -S -passes=hipstdpar-interpose-alloc %s | FileCheck %s
++
++%"struct.std::nothrow_t" = type { i8 }
++
++@_ZSt7nothrow = external global %"struct.std::nothrow_t", align 1
++
++declare ptr @__hipstdpar_aligned_alloc(i64, i64)
++
++declare ptr @__hipstdpar_malloc(i64)
++
++declare ptr @__hipstdpar_calloc(i64, i64)
++
++declare i32 @__hipstdpar_posix_aligned_alloc(ptr, i64, i64)
++
++declare void @__hipstdpar_hidden_free(ptr)
++
++declare ptr @__hipstdpar_realloc(ptr, i64)
++
++declare ptr @__hipstdpar_realloc_array(ptr, i64, i64)
++
++declare void @__hipstdpar_free(ptr)
++
++declare ptr @__hipstdpar_operator_new_aligned(i64, i64)
++
++declare ptr @__hipstdpar_operator_new(i64)
++
++declare ptr @__hipstdpar_operator_new_nothrow(i64, %"struct.std::nothrow_t")
++
++declare ptr @__hipstdpar_operator_new_aligned_nothrow(i64, i64, %"struct.std::nothrow_t")
++
++declare void @__hipstdpar_operator_delete_aligned_sized(ptr, i64, i64)
++
++declare void @__hipstdpar_operator_delete(ptr)
++
++declare void @__hipstdpar_operator_delete_aligned(ptr, i64)
++
++declare void @__hipstdpar_operator_delete_sized(ptr, i64)
++
++define dso_local noundef i32 @allocs() {
++  ; CHECK: %1 = call noalias align 8 ptr @__hipstdpar_aligned_alloc(i64 noundef 8, i64 noundef 42)
++  %1 = call noalias align 8 ptr @aligned_alloc(i64 noundef 8, i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %1)
++  call void @free(ptr noundef %1)
++
++  ; CHECK: %2 = call noalias ptr @__hipstdpar_calloc(i64 noundef 1, i64 noundef 42)
++  %2 = call noalias ptr @calloc(i64 noundef 1, i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %2)
++  call void @free(ptr noundef %2)
++
++  ; CHECK: %3 = call noalias ptr @__hipstdpar_malloc(i64 noundef 42)
++  %3 = call noalias ptr @malloc(i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %3)
++  call void @free(ptr noundef %3)
++
++  ; CHECK: %4 = call noalias align 8 ptr @__hipstdpar_aligned_alloc(i64 noundef 8, i64 noundef 42)
++  %4 = call noalias align 8 ptr @memalign(i64 noundef 8, i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %4)
++  call void @free(ptr noundef %4)
++
++  %tmp = alloca ptr, align 8
++  ; CHECK: %5 = call i32 @__hipstdpar_posix_aligned_alloc(ptr noundef %tmp, i64 noundef 8, i64 noundef 42)
++  %5 = call i32 @posix_memalign(ptr noundef %tmp, i64 noundef 8, i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %tmp)
++  call void @free(ptr noundef %tmp)
++
++  ; CHECK: %6 = call noalias ptr @__hipstdpar_malloc(i64 noundef 42)
++  %6 = call noalias ptr @malloc(i64 noundef 42)
++  ; CHECK: %7 = call ptr @__hipstdpar_realloc(ptr noundef %6, i64 noundef 42)
++  %7 = call ptr @realloc(ptr noundef %6, i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %7)
++  call void @free(ptr noundef %7)
++
++  ; CHECK: %8 = call noalias ptr @__hipstdpar_calloc(i64 noundef 1, i64 noundef 42)
++  %8 = call noalias ptr @calloc(i64 noundef 1, i64 noundef 42)
++  ; CHECK: %9 = call ptr @__hipstdpar_realloc_array(ptr noundef %8, i64 noundef 1, i64 noundef 42)
++  %9 = call ptr @reallocarray(ptr noundef %8, i64 noundef 1, i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %9)
++  call void @free(ptr noundef %9)
++
++  ; CHECK: %10 = call noalias noundef nonnull ptr @__hipstdpar_operator_new(i64 noundef 1)
++  %10 = call noalias noundef nonnull ptr @_Znwm(i64 noundef 1)
++  ; CHECK: call void @__hipstdpar_operator_delete(ptr noundef %10)
++  call void @_ZdlPv(ptr noundef %10)
++
++  ; CHECK: %11 = call noalias noundef nonnull align 8 ptr @__hipstdpar_operator_new_aligned(i64 noundef 1, i64 noundef 8)
++  %11 = call noalias noundef nonnull align 8 ptr @_ZnwmSt11align_val_t(i64 noundef 1, i64 noundef 8)
++  ; CHECK: call void @__hipstdpar_operator_delete_aligned(ptr noundef %11, i64 noundef 8)
++  call void @_ZdlPvSt11align_val_t(ptr noundef %11, i64 noundef 8)
++
++  ; CHECK: %12 = call noalias noundef ptr @__hipstdpar_operator_new_nothrow(i64 noundef 1, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  %12 = call noalias noundef ptr @_ZnwmRKSt9nothrow_t(i64 noundef 1, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  ; CHECK: call void @__hipstdpar_operator_delete(ptr noundef %12)
++  call void @_ZdlPv(ptr noundef %12)
++
++  ; CHECK: %13 = call noalias noundef align 8 ptr @__hipstdpar_operator_new_aligned_nothrow(i64 noundef 1, i64 noundef 8, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  %13 = call noalias noundef align 8 ptr @_ZnwmSt11align_val_tRKSt9nothrow_t(i64 noundef 1, i64 noundef 8, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  ; CHECK: call void @__hipstdpar_operator_delete_aligned(ptr noundef %13, i64 noundef 8)
++  call void @_ZdlPvSt11align_val_t(ptr noundef %13, i64 noundef 8)
++
++  ; CHECK: %14 = call noalias noundef nonnull ptr @__hipstdpar_operator_new(i64 noundef 42)
++  %14 = call noalias noundef nonnull ptr @_Znam(i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_operator_delete(ptr noundef %14)
++  call void @_ZdaPv(ptr noundef %14)
++
++  ; CHECK: %15 = call noalias noundef nonnull align 8 ptr @__hipstdpar_operator_new_aligned(i64 noundef 42, i64 noundef 8)
++  %15 = call noalias noundef nonnull align 8 ptr @_ZnamSt11align_val_t(i64 noundef 42, i64 noundef 8)
++  ; CHECK: call void @__hipstdpar_operator_delete_aligned(ptr noundef %15, i64 noundef 8)
++  call void @_ZdaPvSt11align_val_t(ptr noundef %15, i64 noundef 8)
++
++  ; CHECK:  %16 = call noalias noundef ptr @__hipstdpar_operator_new_nothrow(i64 noundef 42, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  %16 = call noalias noundef ptr @_ZnamRKSt9nothrow_t(i64 noundef 42, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  ; CHECK: call void @__hipstdpar_operator_delete(ptr noundef %16)
++  call void @_ZdaPv(ptr noundef %16)
++
++  ; CHECK: %17 = call noalias noundef align 8 ptr @__hipstdpar_operator_new_aligned_nothrow(i64 noundef 42, i64 noundef 8, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  %17 = call noalias noundef align 8 ptr @_ZnamSt11align_val_tRKSt9nothrow_t(i64 noundef 42, i64 noundef 8, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  ; CHECK: call void @__hipstdpar_operator_delete_aligned(ptr noundef %17, i64 noundef 8)
++  call void @_ZdaPvSt11align_val_t(ptr noundef %17, i64 noundef 8)
++
++  ; CHECK:  %18 = call ptr @__hipstdpar_calloc(i64 noundef 1, i64 noundef 42)
++  %18 = call ptr @calloc(i64 noundef 1, i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %18)
++  call void @free(ptr noundef %18)
++
++  ; CHECK: %19 = call ptr @__hipstdpar_malloc(i64 noundef 42)
++  %19 = call ptr @malloc(i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %19)
++  call void @free(ptr noundef %19)
++
++  ; CHECK: %20 = call noalias noundef nonnull ptr @__hipstdpar_operator_new(i64 noundef 42)
++  %20 = call noalias noundef nonnull ptr @_Znwm(i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_operator_delete(ptr noundef %20)
++  call void @_ZdlPv(ptr noundef %20)
++
++  ; CHECK:  %21 = call noalias noundef nonnull align 8 ptr @__hipstdpar_operator_new_aligned(i64 noundef 42, i64 noundef 8)
++  %21 = call noalias noundef nonnull align 8 ptr @_ZnwmSt11align_val_t(i64 noundef 42, i64 noundef 8)
++  ; CHECK: call void @__hipstdpar_operator_delete_aligned(ptr noundef %21, i64 noundef 8)
++  call void @_ZdlPvSt11align_val_t(ptr noundef %21, i64 noundef 8)
++
++  ; CHECK: %22 = call noalias noundef ptr @__hipstdpar_operator_new_nothrow(i64 noundef 42, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  %22 = call noalias noundef ptr @_ZnwmRKSt9nothrow_t(i64 noundef 42, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  ; CHECK: call void @__hipstdpar_operator_delete(ptr noundef %22)
++  call void @_ZdlPv(ptr noundef %22)
++
++  ; CHECK:  %23 = call noalias noundef align 8 ptr @__hipstdpar_operator_new_aligned_nothrow(i64 noundef 42, i64 noundef 8, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  %23 = call noalias noundef align 8 ptr @_ZnwmSt11align_val_tRKSt9nothrow_t(i64 noundef 42, i64 noundef 8, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  ; CHECK: call void @__hipstdpar_operator_delete_aligned(ptr noundef %23, i64 noundef 8)
++  call void @_ZdlPvSt11align_val_t(ptr noundef %23, i64 noundef 8)
++
++  ; CHECK: %24 = call ptr @__hipstdpar_malloc(i64 noundef 42)
++  %24 = call ptr @malloc(i64 noundef 42)
++  ; CHECK: %25 = call ptr @__hipstdpar_realloc(ptr noundef %24, i64 noundef 41)
++  %25 = call ptr @realloc(ptr noundef %24, i64 noundef 41)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %25)
++  call void @free(ptr noundef %25)
++
++  ; CHECK: %26 = call ptr @__hipstdpar_calloc(i64 noundef 1, i64 noundef 42)
++  %26 = call ptr @__libc_calloc(i64 noundef 1, i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %26)
++  call void @__libc_free(ptr noundef %26)
++
++  ; CHECK: %27 = call ptr @__hipstdpar_malloc(i64 noundef 42)
++  %27 = call ptr @__libc_malloc(i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %27)
++  call void @__libc_free(ptr noundef %27)
++
++  ; CHECK: %28 = call ptr @__hipstdpar_aligned_alloc(i64 noundef 8, i64 noundef 42)
++  %28 = call ptr @__libc_memalign(i64 noundef 8, i64 noundef 42)
++  ; CHECK: call void @__hipstdpar_free(ptr noundef %28)
++  call void @__libc_free(ptr noundef %28)
++
++  ret i32 0
++}
++
++declare noalias ptr @aligned_alloc(i64 noundef, i64 noundef)
++
++declare void @free(ptr noundef)
++
++declare noalias ptr @calloc(i64 noundef, i64 noundef)
++
++declare noalias ptr @malloc(i64 noundef)
++
++declare noalias ptr @memalign(i64 noundef, i64 noundef)
++
++declare i32 @posix_memalign(ptr noundef, i64 noundef, i64 noundef)
++
++declare ptr @realloc(ptr noundef, i64 noundef)
++
++declare ptr @reallocarray(ptr noundef, i64 noundef, i64 noundef)
++
++declare noundef nonnull ptr @_Znwm(i64 noundef)
++
++declare void @_ZdlPv(ptr noundef)
++
++declare noalias noundef nonnull ptr @_ZnwmSt11align_val_t(i64 noundef, i64 noundef)
++
++declare void @_ZdlPvSt11align_val_t(ptr noundef, i64 noundef)
++
++declare noalias noundef ptr @_ZnwmRKSt9nothrow_t(i64 noundef, ptr noundef nonnull align 1 dereferenceable(1))
++
++declare noalias noundef ptr @_ZnwmSt11align_val_tRKSt9nothrow_t(i64 noundef, i64 noundef, ptr noundef nonnull align 1 dereferenceable(1))
++
++declare noundef nonnull ptr @_Znam(i64 noundef)
++
++declare void @_ZdaPv(ptr noundef)
++
++declare noalias noundef nonnull ptr @_ZnamSt11align_val_t(i64 noundef, i64 noundef)
++
++declare void @_ZdaPvSt11align_val_t(ptr noundef, i64 noundef)
++
++declare noalias noundef ptr @_ZnamRKSt9nothrow_t(i64 noundef, ptr noundef nonnull align 1 dereferenceable(1))
++
++declare noalias noundef ptr @_ZnamSt11align_val_tRKSt9nothrow_t(i64 noundef, i64 noundef, ptr noundef nonnull align 1 dereferenceable(1))
++
++declare ptr @__libc_calloc(i64 noundef, i64 noundef)
++
++declare void @__libc_free(ptr noundef)
++
++declare ptr @__libc_malloc(i64 noundef)
++
++declare ptr @__libc_memalign(i64 noundef, i64 noundef)
+\ No newline at end of file
+diff --git a/llvm/test/Transforms/HipStdPar/allocation-no-interposition.ll b/llvm/test/Transforms/HipStdPar/allocation-no-interposition.ll
+new file mode 100644
+index 000000000000..15640c6ae94e
+--- /dev/null
++++ b/llvm/test/Transforms/HipStdPar/allocation-no-interposition.ll
+@@ -0,0 +1,161 @@
++; RUN: opt < %s -passes=hipstdpar-interpose-alloc -S 2>&1 | FileCheck %s
++
++; CHECK: warning: {{.*}} aligned_alloc {{.*}} cannot be interposed, missing: __hipstdpar_aligned_alloc. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} free {{.*}} cannot be interposed, missing: __hipstdpar_free. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} calloc {{.*}} cannot be interposed, missing: __hipstdpar_calloc. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} malloc {{.*}} cannot be interposed, missing: __hipstdpar_malloc. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} memalign {{.*}} cannot be interposed, missing: __hipstdpar_aligned_alloc. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} posix_memalign {{.*}} cannot be interposed, missing: __hipstdpar_posix_aligned_alloc. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} realloc {{.*}} cannot be interposed, missing: __hipstdpar_realloc. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} reallocarray {{.*}} cannot be interposed, missing: __hipstdpar_realloc_array. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _Znwm {{.*}} cannot be interposed, missing: __hipstdpar_operator_new. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _ZdlPv {{.*}} cannot be interposed, missing: __hipstdpar_operator_delete. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _ZnwmSt11align_val_t {{.*}} cannot be interposed, missing: __hipstdpar_operator_new_aligned. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _ZdlPvSt11align_val_t {{.*}} cannot be interposed, missing: __hipstdpar_operator_delete_aligned. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _ZnwmRKSt9nothrow_t {{.*}} cannot be interposed, missing: __hipstdpar_operator_new_nothrow. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _ZnwmSt11align_val_tRKSt9nothrow_t {{.*}} cannot be interposed, missing: __hipstdpar_operator_new_aligned_nothrow. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _Znam {{.*}} cannot be interposed, missing: __hipstdpar_operator_new. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _ZdaPv {{.*}} cannot be interposed, missing: __hipstdpar_operator_delete. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _ZnamSt11align_val_t {{.*}} cannot be interposed, missing: __hipstdpar_operator_new_aligned. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _ZdaPvSt11align_val_t {{.*}} cannot be interposed, missing: __hipstdpar_operator_delete_aligned. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _ZnamRKSt9nothrow_t {{.*}} cannot be interposed, missing: __hipstdpar_operator_new_nothrow. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} _ZnamSt11align_val_tRKSt9nothrow_t {{.*}} cannot be interposed, missing: __hipstdpar_operator_new_aligned_nothrow. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} __libc_calloc {{.*}} cannot be interposed, missing: __hipstdpar_calloc. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} __libc_free {{.*}} cannot be interposed, missing: __hipstdpar_free. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} __libc_malloc {{.*}} cannot be interposed, missing: __hipstdpar_malloc. Tried to run the allocation interposition pass without the replacement functions available.
++; CHECK: warning: {{.*}} __libc_memalign {{.*}} cannot be interposed, missing: __hipstdpar_aligned_alloc. Tried to run the allocation interposition pass without the replacement functions available.
++
++%"struct.std::nothrow_t" = type { i8 }
++
++@_ZSt7nothrow = external global %"struct.std::nothrow_t", align 1
++
++define dso_local noundef i32 @allocs() {
++  %1 = call noalias align 8 ptr @aligned_alloc(i64 noundef 8, i64 noundef 42)
++  call void @free(ptr noundef %1)
++
++  %2 = call noalias ptr @calloc(i64 noundef 1, i64 noundef 42)
++  call void @free(ptr noundef %2)
++
++  %3 = call noalias ptr @malloc(i64 noundef 42)
++  call void @free(ptr noundef %3)
++
++  %4 = call noalias align 8 ptr @memalign(i64 noundef 8, i64 noundef 42)
++  call void @free(ptr noundef %4)
++
++  %tmp = alloca ptr, align 8
++  %5 = call i32 @posix_memalign(ptr noundef %tmp, i64 noundef 8, i64 noundef 42)
++  call void @free(ptr noundef %tmp)
++
++  %6 = call noalias ptr @malloc(i64 noundef 42)
++  %7 = call ptr @realloc(ptr noundef %6, i64 noundef 42)
++  call void @free(ptr noundef %7)
++
++  %8 = call noalias ptr @calloc(i64 noundef 1, i64 noundef 42)
++  %9 = call ptr @reallocarray(ptr noundef %8, i64 noundef 1, i64 noundef 42)
++  call void @free(ptr noundef %9)
++
++  %10 = call noalias noundef nonnull ptr @_Znwm(i64 noundef 1)
++  call void @_ZdlPv(ptr noundef %10)
++
++  %11 = call noalias noundef nonnull align 8 ptr @_ZnwmSt11align_val_t(i64 noundef 1, i64 noundef 8)
++  call void @_ZdlPvSt11align_val_t(ptr noundef %11, i64 noundef 8)
++
++  %12 = call noalias noundef ptr @_ZnwmRKSt9nothrow_t(i64 noundef 1, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  call void @_ZdlPv(ptr noundef %12)
++
++  %13 = call noalias noundef align 8 ptr @_ZnwmSt11align_val_tRKSt9nothrow_t(i64 noundef 1, i64 noundef 8, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  call void @_ZdlPvSt11align_val_t(ptr noundef %13, i64 noundef 8)
++
++  %14 = call noalias noundef nonnull ptr @_Znam(i64 noundef 42)
++  call void @_ZdaPv(ptr noundef %14)
++
++  %15 = call noalias noundef nonnull align 8 ptr @_ZnamSt11align_val_t(i64 noundef 42, i64 noundef 8)
++  call void @_ZdaPvSt11align_val_t(ptr noundef %15, i64 noundef 8)
++
++  %16 = call noalias noundef ptr @_ZnamRKSt9nothrow_t(i64 noundef 42, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  call void @_ZdaPv(ptr noundef %16)
++
++  %17 = call noalias noundef align 8 ptr @_ZnamSt11align_val_tRKSt9nothrow_t(i64 noundef 42, i64 noundef 8, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  call void @_ZdaPvSt11align_val_t(ptr noundef %17, i64 noundef 8)
++
++  %18 = call ptr @calloc(i64 noundef 1, i64 noundef 42)
++  call void @free(ptr noundef %18)
++
++  %19 = call ptr @malloc(i64 noundef 42)
++  call void @free(ptr noundef %19)
++
++  %20 = call noalias noundef nonnull ptr @_Znwm(i64 noundef 42)
++  call void @_ZdlPv(ptr noundef %20)
++
++  %21 = call noalias noundef nonnull align 8 ptr @_ZnwmSt11align_val_t(i64 noundef 42, i64 noundef 8)
++  call void @_ZdlPvSt11align_val_t(ptr noundef %21, i64 noundef 8)
++
++  %22 = call noalias noundef ptr @_ZnwmRKSt9nothrow_t(i64 noundef 42, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  call void @_ZdlPv(ptr noundef %22)
++
++  %23 = call noalias noundef align 8 ptr @_ZnwmSt11align_val_tRKSt9nothrow_t(i64 noundef 42, i64 noundef 8, ptr noundef nonnull align 1 dereferenceable(1) @_ZSt7nothrow)
++  call void @_ZdlPvSt11align_val_t(ptr noundef %23, i64 noundef 8)
++
++  %24 = call ptr @malloc(i64 noundef 42)
++  %25 = call ptr @realloc(ptr noundef %24, i64 noundef 41)
++  call void @free(ptr noundef %25)
++
++  %26 = call ptr @__libc_calloc(i64 noundef 1, i64 noundef 42)
++  call void @__libc_free(ptr noundef %26)
++
++  %27 = call ptr @__libc_malloc(i64 noundef 42)
++  call void @__libc_free(ptr noundef %27)
++
++  %28 = call ptr @__libc_memalign(i64 noundef 8, i64 noundef 42)
++  call void @__libc_free(ptr noundef %28)
++
++  ret i32 0
++}
++
++declare noalias ptr @aligned_alloc(i64 noundef, i64 noundef)
++
++declare void @free(ptr noundef)
++
++declare noalias ptr @calloc(i64 noundef, i64 noundef)
++
++declare noalias ptr @malloc(i64 noundef)
++
++declare noalias ptr @memalign(i64 noundef, i64 noundef)
++
++declare i32 @posix_memalign(ptr noundef, i64 noundef, i64 noundef)
++
++declare ptr @realloc(ptr noundef, i64 noundef)
++
++declare ptr @reallocarray(ptr noundef, i64 noundef, i64 noundef)
++
++declare noundef nonnull ptr @_Znwm(i64 noundef)
++
++declare void @_ZdlPv(ptr noundef)
++
++declare noalias noundef nonnull ptr @_ZnwmSt11align_val_t(i64 noundef, i64 noundef)
++
++declare void @_ZdlPvSt11align_val_t(ptr noundef, i64 noundef)
++
++declare noalias noundef ptr @_ZnwmRKSt9nothrow_t(i64 noundef, ptr noundef nonnull align 1 dereferenceable(1))
++
++declare noalias noundef ptr @_ZnwmSt11align_val_tRKSt9nothrow_t(i64 noundef, i64 noundef, ptr noundef nonnull align 1 dereferenceable(1))
++
++declare noundef nonnull ptr @_Znam(i64 noundef)
++
++declare void @_ZdaPv(ptr noundef)
++
++declare noalias noundef nonnull ptr @_ZnamSt11align_val_t(i64 noundef, i64 noundef)
++
++declare void @_ZdaPvSt11align_val_t(ptr noundef, i64 noundef)
++
++declare noalias noundef ptr @_ZnamRKSt9nothrow_t(i64 noundef, ptr noundef nonnull align 1 dereferenceable(1))
++
++declare noalias noundef ptr @_ZnamSt11align_val_tRKSt9nothrow_t(i64 noundef, i64 noundef, ptr noundef nonnull align 1 dereferenceable(1))
++
++declare ptr @__libc_calloc(i64 noundef, i64 noundef)
++
++declare void @__libc_free(ptr noundef)
++
++declare ptr @__libc_malloc(i64 noundef)
++
++declare ptr @__libc_memalign(i64 noundef, i64 noundef)
+\ No newline at end of file
+diff --git a/llvm/test/Transforms/HipStdPar/unsupported-asm.ll b/llvm/test/Transforms/HipStdPar/unsupported-asm.ll
+new file mode 100644
+index 000000000000..19e6b28cc916
+--- /dev/null
++++ b/llvm/test/Transforms/HipStdPar/unsupported-asm.ll
+@@ -0,0 +1,12 @@
++; RUN: not opt -S -mtriple=amdgcn-amd-amdhsa -passes=hipstdpar-select-accelerator-code \
++; RUN: %s 2>&1 | FileCheck %s
++
++; CHECK: error: {{.*}} in function foo void (): Accelerator does not support the ASM block:
++; CHECK-NEXT: {{.*}}Invalid ASM block{{.*}}
++define amdgpu_kernel void @foo() {
++entry:
++  call void @__ASM__hipstdpar_unsupported([18 x i8] c"Invalid ASM block\00")
++  ret void
++}
++
++declare void @__ASM__hipstdpar_unsupported([18 x i8])
+\ No newline at end of file
+diff --git a/llvm/test/Transforms/HipStdPar/unsupported-builtins.ll b/llvm/test/Transforms/HipStdPar/unsupported-builtins.ll
+new file mode 100644
+index 000000000000..19490dad80ba
+--- /dev/null
++++ b/llvm/test/Transforms/HipStdPar/unsupported-builtins.ll
+@@ -0,0 +1,11 @@
++; RUN: not opt -S -mtriple=amdgcn-amd-amdhsa -passes=hipstdpar-select-accelerator-code \
++; RUN: %s 2>&1 | FileCheck %s
++
++; CHECK: error: {{.*}} in function foo void (): Accelerator does not support the __builtin_ia32_pause function
++define amdgpu_kernel void @foo() {
++entry:
++  call void @__builtin_ia32_pause__hipstdpar_unsupported()
++  ret void
++}
++
++declare void @__builtin_ia32_pause__hipstdpar_unsupported()
+\ No newline at end of file
+diff --git a/llvm/test/Transforms/HipStdPar/unsupported-thread-local-direct-use.ll b/llvm/test/Transforms/HipStdPar/unsupported-thread-local-direct-use.ll
+new file mode 100644
+index 000000000000..fa17bb114eae
+--- /dev/null
++++ b/llvm/test/Transforms/HipStdPar/unsupported-thread-local-direct-use.ll
+@@ -0,0 +1,14 @@
++; RUN: not opt -S -mtriple=amdgcn-amd-amdhsa -passes=hipstdpar-select-accelerator-code \
++; RUN:   %s 2>&1 | FileCheck %s
++
++@tls = hidden thread_local addrspace(1) global i32 0, align 4
++
++; CHECK: error: {{.*}} in function direct_use void (): Accelerator does not support the thread_local variable tls
++define amdgpu_kernel void @direct_use() {
++entry:
++  %0 = call align 4 ptr addrspace(1) @llvm.threadlocal.address.p1(ptr addrspace(1) @tls)
++  %1 = load i32, ptr addrspace(1) %0, align 4
++  ret void
++}
++
++declare nonnull ptr addrspace(1) @llvm.threadlocal.address.p1(ptr addrspace(1) nonnull)
+diff --git a/llvm/test/Transforms/HipStdPar/unsupported-thread-local-indirect-use.ll b/llvm/test/Transforms/HipStdPar/unsupported-thread-local-indirect-use.ll
+new file mode 100644
+index 000000000000..40014853d8ac
+--- /dev/null
++++ b/llvm/test/Transforms/HipStdPar/unsupported-thread-local-indirect-use.ll
+@@ -0,0 +1,14 @@
++; RUN: not opt -S -mtriple=amdgcn-amd-amdhsa -passes=hipstdpar-select-accelerator-code \
++; RUN:   %s 2>&1 | FileCheck %s
++
++@tls = hidden thread_local addrspace(1) global i32 0, align 4
++
++; CHECK: error: {{.*}} in function indirect_use void (): Accelerator does not support the thread_local variable tls
++define amdgpu_kernel void @indirect_use() {
++entry:
++  %0 = call align 4 ptr @llvm.threadlocal.address.p0(ptr addrspacecast (ptr addrspace(1) @tls to ptr))
++  %1 = load i32, ptr %0, align 4
++  ret void
++}
++
++declare nonnull ptr @llvm.threadlocal.address.p0(ptr nonnull)

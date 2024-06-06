@@ -161,6 +161,15 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         sticky=True,
         when="+adaptivecpp",
     )
+    variant(
+        "cuda_arch",
+        description="CUDA architecture",
+        values=supported_cuda_archs+["none"],
+        default=default_cuda_arch(supported_cuda_archs)[0],
+        multi=True,
+        sticky=True,
+        when="+stdpar",
+    )
 
 
     variant(
@@ -192,6 +201,16 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         sticky=True,
         when="+adaptivecpp",
     )
+    variant(
+        "amdgpu_target",
+        description="HIP GPU architecture",
+        values=list(ROCmPackage.amdgpu_targets)+list(["none"]),
+        default=amd_arch()[0],
+        multi=True,
+        sticky=True,
+        when="+stdpar",
+    )
+
 
 
 
@@ -232,18 +251,25 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     variant("language_bindings", default=False, description="Enable language bindings") # TODO: dependancies
 
     variant("stdpar", default=False, description="Enable stdpar backend") # TODO: dependancies
-    conflicts("stdpar", when="+adaptivecpp", msg="AdaptiveCpp backend is not compatible with stdpar backend.")
-    conflicts("stdpar", when="+dpcpp", msg="DPC++ backend is not compatible with stdpar backend.")
-    conflicts("stdpar", when="+icpx", msg="Intel SYCL backend is not compatible with stdpar backend.")
-    conflicts("stdpar", when="+opencl", msg="OpenCL backend is not compatible with stdpar backend.")
-    conflicts("stdpar", when="+cuda", msg="CUDA backend is not compatible with stdpar backend.")
-    conflicts("stdpar", when="+hip", msg="HIP backend is not compatible with stdpar backend.")
+    conflicts("+stdpar", when="+adaptivecpp", msg="AdaptiveCpp backend is not compatible with stdpar backend.")
+    conflicts("+stdpar", when="+dpcpp", msg="DPC++ backend is not compatible with stdpar backend.")
+    conflicts("+stdpar", when="+icpx", msg="Intel SYCL backend is not compatible with stdpar backend.")
+    conflicts("+stdpar", when="+opencl", msg="OpenCL backend is not compatible with stdpar backend.")
+    conflicts("+stdpar", when="+cuda", msg="CUDA backend is not compatible with stdpar backend.")
+    conflicts("+stdpar", when="+hip", msg="HIP backend is not compatible with stdpar backend.")
+    conflicts("+stdpar", when="+openmp", msg="OpenMP backend is not compatible with stdpar backend.")
+
+
 
     variant("stdparimplementation",
-            when=stdpar,
+            when="+stdpar",
             default="adaptivecpp",
             values=("adaptivecpp", "icpx", "gnu-tbb", "nvhpc", "roc")
     )
+
+    requires("cuda_arch=none", when="stdparimplementation=roc")
+    requires("amdgpu_target=none", when="stdparimplementation=nvhpc")
+
 
 
     default_sycl_target_arch=default_cuda_arch(supported_cuda_archs)[0]
@@ -274,7 +300,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
     # FIXME: Add dependencies if required.
 
-    depends_on("fmt@9.1.0")
+    depends_on("fmt@10.2.1")
     depends_on("cxxopts@3.2.0")
     depends_on("igor@master")
     depends_on("fast-float@6.1.1")
@@ -303,13 +329,28 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     depends_on("nvhpc", when="stdparimplementation=nvhpc", type="build")
     depends_on("adaptivecpp", when="+adaptivecpp")
     depends_on("adaptivecpp", when="stdparimplementation=adaptivecpp")
+    depends_on("intel-oneapi-tbb", when="stdparimplementation=adaptivecpp")
+    depends_on("intel-tbb@:2020.3", when="stdparimplementation=gnu-tbb")
     depends_on("llvm", when="+adaptivecpp")
 
     depends_on("intel-oneapi-compilers", when="+icpx")
     depends_on("intel-oneapi-compilers", when="stdparimplementation=icpx")
     depends_on("intel-oneapi-tbb", when="+icpx")
-    depends_on("intel-oneapi-tbb", when="stdparimplementation=icpx")
+    depends_on("intel-tbb@:2020.3", when="stdparimplementation=icpx")
+    depends_on("intel-oneapi-dpl", when="stdparimplementation=icpx")
 
+    depends_on("boost@1.73.0:+atomic" , when="stdparimplementation=gnu-tbb")
+    depends_on("boost@1.73.0:" , when="stdparimplementation=nvhpc")
+    depends_on("boost@1.73.0:" , when="stdparimplementation=roc")
+
+    # depends_on("    llvm@roc-stdpar+clang~gold",
+    #             patches="CLANG_LLVM.patch",
+    #         #    patches=[patch(
+    #         #     "https://github.com/ROCm/roc-stdpar/raw/ffb6e6e7ef8ee21dcc07793540fdca9b71921ca1/data/patches/LLVM/CLANG_LLVM.patch",
+    #         #    sha256="8103bc75ea7b651174f4c1aaffe292f892e130c771811e27fdf7af3fc5610c3b")],
+    #            when="stdparimplementation=roc")
+
+    depends_on("roc-stdpar", when="stdparimplementation=roc")
     # TODO: depends_on("tbb", when="stdparimplementation=gnu-tbb")
     # TODO: depends_on("rocstdpar", when="stdparimplementation=roc")
 
@@ -340,10 +381,12 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         depends_on("cuda", when="+opencl cuda_arch={0}".format(cuda_arch))
         depends_on("adaptivecpp+cuda", when="+adaptivecpp cuda_arch={0}".format(cuda_arch))
         depends_on("oneapi-plugin-nvidia", when="+icpx cuda_arch={0}".format(cuda_arch))
+        depends_on("oneapi-plugin-nvidia", when="+stdpar stdparimplementation=icpx cuda_arch={0}".format(cuda_arch))
     for amdgpu_arch in ROCmPackage.amdgpu_targets:
         depends_on("rocm-opencl", when="+opencl amdgpu_target={0}".format(amdgpu_arch))
         depends_on("adaptivecpp+rocm", when="+adaptivecpp amdgpu_target={0}".format(amdgpu_arch))
         depends_on("oneapi-plugin-amd", when="+icpx amdgpu_target={0}".format(amdgpu_arch))
+        depends_on("oneapi-plugin-amd", when="+icpx stdparimplementation=icpx amdgpu_target={0}".format(amdgpu_arch))
         depends_on("dpcpp@2023-03:+openmp +rocm rocm-platform=AMD",
                    when="+dpcpp sycl_target_arch={0}".format(amdgpu_arch))
 
@@ -418,6 +461,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         # args += [self.define_from_variant("PLSSVM_ENABLE_SYCL_BACKEND", "dpcpp")]
         if "+adaptivecpp" in self.spec or "+dpcpp" in self.spec or "+icpx" in self.spec:
             args += [self.define("PLSSVM_ENABLE_SYCL_BACKEND", "ON")]
+        else:
+            args += [self.define("PLSSVM_ENABLE_SYCL_BACKEND", "OFF")]
 
 
         if "+adaptivecpp" in self.spec:
@@ -442,6 +487,13 @@ class Plssvm(CMakePackage,CudaPackage,  ):
             target_arch += ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)]
         if "amdgpu_target" in self.spec.variants and not "none" in self.spec.variants["amdgpu_target"].value:
             target_arch += ["amd:" + ",".join(self.spec.variants["amdgpu_target"].value)]
+
+        if "+stdpar" in self.spec:
+            if target_arch == [] or "gnu-tbb" in self.spec.variants["stdparimplementation"].value:
+                args += [self.define("PLSSVM_STDPAR_TARGET_PLATFORMS", "cpu")]
+            else:
+                args += [self.define("PLSSVM_STDPAR_TARGET_PLATFORMS", ";".join(target_arch))]
+
 
         if "+openmp" in self.spec:
             args += [self.define("PLSSVM_OPENMP_TARGET_PLATFORMS", "cpu")]
@@ -471,6 +523,37 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
 
         # args += [self.define("PLSSVM_TARGET_PLATFORMS", "cpu;nvidia:sm_80")]
+
+        args += [self.define_from_variant("PLSSVM_ENABLE_STDPAR_BACKEND", "stdpar")]
+
+        stdpar_keys = {
+            "adaptivecpp": "ACPP",
+            "icpx": "IntelLLVM",
+            "gnu-tbb": "GNU_TBB",
+            "nvhpc": "NVHPC",
+            "roc": "roc-stdpar"
+        }
+
+
+
+        if "+stdpar" in self.spec:
+            args += [self.define("PLSSVM_STDPAR_BACKEND_IMPLEMENTATION", stdpar_keys[self.spec.variants["stdparimplementation"].value])]
+
+            if "stdparimplementation=adaptivecpp" in self.spec:
+                args += [self.define("CMAKE_CXX_COMPILER", "{0}/bin/acpp".format(self.spec["adaptivecpp"].prefix))]
+            if "stdparimplementation=icpx" in self.spec:
+                args += [self.define("CMAKE_CXX_COMPILER", "{0}/compiler/latest/bin/icpx".format(self.spec["intel-oneapi-compilers"].prefix))]
+            if "stdparimplementation=nvhpc" in self.spec:
+                args += [self.define("CMAKE_CXX_COMPILER", "{0}/Linux_x86_64/{1}/compilers/bin/nvc++".format(self.spec["nvhpc"].prefix, self.spec["nvhpc"].version ))] # FIXME: other targets than Linux_x86_64
+
+            if "stdparimplementation=roc" in self.spec:
+                args += [self.define("CMAKE_CXX_COMPILER", "{0}/bin/clang++".format(self.spec["llvm"].prefix))] # FIXME: ROC-stdpar package
+                args += [self.define("PLSSVM_STDPAR_BACKEND_HIPSTDPAR_PATH", "{0}/include".format(self.spec["roc-stdpar"].prefix))]
+
+            if "stdparimplementation=gnu-tbb" in self.spec:
+                requires("%gcc", msg="GNU TBB backend requires GCC")
+                args += [self.define("TBB_ROOT", "{0}".format(self.spec["tbb"].prefix))]
+
 
         return args
 
