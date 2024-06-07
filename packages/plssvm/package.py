@@ -321,7 +321,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     depends_on("py-humanize", when="+test_file")
     depends_on("py-numpy", when="+test_file")
 
-    depends_on("hip@4.5.0:", when="+hip")
+    depends_on("hip", when="+hip")
     # if not "amdgpu_target=none" in self.variant:
 
 
