@@ -331,7 +331,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     conflicts("stdparimplementation=nvhpc", when="~reducing_label_types", msg="nvhpc does not support long double in GPU kernel code")
     depends_on("adaptivecpp", when="+adaptivecpp")
     depends_on("adaptivecpp", when="stdparimplementation=adaptivecpp")
-    depends_on("intel-oneapi-tbb", when="stdparimplementation=adaptivecpp")
+    depends_on("intel-tbb@:2020.3", when="stdparimplementation=adaptivecpp")
     depends_on("intel-tbb@:2020.3", when="stdparimplementation=gnu-tbb")
     depends_on("llvm ~gold", when="+adaptivecpp") # TODO: remove ~gold if llvm compiles without it
 
