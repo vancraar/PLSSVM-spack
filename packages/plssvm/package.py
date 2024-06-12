@@ -222,6 +222,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     variant("test_file_num_data_points", default=5000, values=int, when="+test_file", description="Number of data points in the test file")
     variant("test_file_num_features", default=2000, values=int, when="+test_file", description="Number of features in the test file")
     variant("test_file_num_classes", default=5, values=int, when="+test_file", description="Number of different labels in the test file")
+    variant("reducing_label_types", default=False, when"+test", description="Tests with reduced label types")
     variant("documentation", default=False, description="Enable documentation")
     variant("fast-math", default=True, description="Enable fast math optimizations")
 
