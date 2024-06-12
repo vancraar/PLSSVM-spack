@@ -328,6 +328,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
     depends_on("cuda", when="+cuda")
     depends_on("nvhpc", when="stdparimplementation=nvhpc", type="build")
+    conflicts("stdparimplementation=nvhpc", when="~reducing_label_types", msg="nvhpc does not support long double in GPU kernel code")
     depends_on("adaptivecpp", when="+adaptivecpp")
     depends_on("adaptivecpp", when="stdparimplementation=adaptivecpp")
     depends_on("intel-oneapi-tbb", when="stdparimplementation=adaptivecpp")
@@ -424,6 +425,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
         #args += [self.define("PLSSVM_ENABLE_TESTING", self.run_tests)]
         args += [self.define_from_variant("PLSSVM_ENABLE_TESTING", "test")]
+        args += [self.define_from_variant("PLSSVM_TEST_WITH_REDUCED_LABEL_TYPES", "reducing_label_types")]
         args += [self.define_from_variant("PLSSVM_ENABLE_ASSERTS", "asserts")]
         args += [self.define_from_variant("PLSSVM_ENABLE_LANGUAGE_BINDINGS", "python")]
         if "+python" in self.spec:
