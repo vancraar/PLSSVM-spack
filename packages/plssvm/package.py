@@ -328,6 +328,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
     depends_on("cuda", when="+cuda")
     depends_on("nvhpc", when="stdparimplementation=nvhpc", type="build")
+    conflicts("nvhpc@24.5", msg="nvhpc 24.5 is not supported")
+    conflicts("nvhpc@24.4", msg="nvhpc 24.4 is not supported")
     conflicts("stdparimplementation=nvhpc", when="~reducing_label_types", msg="nvhpc does not support long double in GPU kernel code")
     depends_on("adaptivecpp", when="+adaptivecpp")
     depends_on("adaptivecpp", when="stdparimplementation=adaptivecpp")
