@@ -21,6 +21,7 @@
 # ----------------------------------------------------------------------------
 
 from spack.package import *
+from spack.compiler import Compiler
 
 
 class Adaptivecpp(CMakePackage):
@@ -73,6 +74,7 @@ class Adaptivecpp(CMakePackage):
     conflicts("%gcc") #TODO enable omp-library-only with gcc
 
 
+    depends_on("llvm@:17.0.6") # remove if bug with llvm 18 is fixed
 
     # FIXME: Add dependencies if required.
     depends_on("python@3:")
@@ -130,10 +132,10 @@ class Adaptivecpp(CMakePackage):
 
         # args += [self.define("CMAKE_CXX_COMPILER", "{0}/bin/clang++".format(self.spec["llvm"].prefix))]
         # args += [self.define("CMAKE_C_COMPILER", "{0}/bin/clang".format(self.spec["llvm"].prefix))]
-        # if "llvm-admgpu" in self.spec:
-        #     args += [self.define("LLVM_DIR", "{0}".format(self.spec["llvm-admgpu"].prefix))]
-        # elif "llvm" in self.spec:
-        #     args += [self.define("LLVM_DIR", "{0}".format(self.spec["llvm"].prefix))]
+        if "llvm-admgpu" in self.spec:
+            args += [self.define("LLVM_DIR", "{0}".format(self.spec["llvm-admgpu"].prefix))]
+        elif "llvm" in self.spec:
+            args += [self.define("LLVM_DIR", "{0}".format(self.spec["llvm"].prefix))]
 
         args += [self.define_from_variant("WITH_ROCM_BACKEND", "rocm")] #TODO
         args += [self.define_from_variant("WITH_OPENCL_BACKEND", "opencl")] #TODO
