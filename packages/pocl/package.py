@@ -50,6 +50,7 @@ class Pocl(CMakePackage):
 
     depends_on("llvm +clang")
     depends_on("llvm @14:15", when="@master")
+    depends_on("llvm @13:17", when="@5.0")
     depends_on("llvm @13:14", when="@3.0")
     depends_on("llvm @12:13", when="@1.8")
     depends_on("llvm @11:12", when="@1.7")
