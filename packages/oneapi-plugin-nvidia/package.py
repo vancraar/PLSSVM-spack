@@ -44,15 +44,18 @@ class OneapiPluginNvidia(Package):
         url = "https://developer.codeplay.com/api/v1/products/download?product=oneapi&variant=nvidia&version={0}&filters[]={1}&filters[]=linux"
         return url.format(version.up_to(3), str(version).split("-")[1])
 
+    version("2024.1.2-12.0", sha256="5a0d1e5eeee5713b6f7c259ef87c044ab4e1bf7bb0b4651da9cde81fd16e43bc",expand=False)
     version("2024.1.0-12.0", sha256="36560ed0f2af951241d7551134b52902efd13abb249922e661dd0913f098ceca",expand=False)
-    version("2024.0.2-12.0", )
+    version("2024.0.2-12.0", sha256="ccc173e1c7eced6793aa81bfdf12608eed1e83c077e48485b0e770688451bc8e",expand=False)
     version("2024.0.1-12.0", )
 
 
+    depends_on("intel-oneapi-compilers@2024.1.2", when="@2024.1.2")
     depends_on("intel-oneapi-compilers@2024.1.0", when="@2024.1.0")
     depends_on("intel-oneapi-compilers@2024.0.2", when="@2024.0.2")
     depends_on("intel-oneapi-compilers@2024.0.1", when="@2024.0.1")
 
+    depends_on("cuda@12.0", when="@2024.1.2-12.0")
     depends_on("cuda@12.0", when="@2024.1.0-12.0")
     depends_on("cuda@12.0", when="@2024.0.2-12.0")
     depends_on("cuda@12.0", when="@2024.0.1-12.0")
