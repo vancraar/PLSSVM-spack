@@ -1,19 +1,13 @@
----
- CMakeLists.txt | 7 ++++++-
- 1 file changed, 6 insertions(+), 1 deletion(-)
-
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index bb9b5d3..78b7d26 100644
+index bb9b5d3..463a756 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -7,4 +7,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
+@@ -7,4 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
  find_package(TBB REQUIRED)
  find_package(Threads REQUIRED)
 
 -add_subdirectory(tests)
 \ No newline at end of file
-+add_subdirectory(tests)
-+
 +INSTALL (
 +    DIRECTORY ${CMAKE_SOURCE_DIR}/include/
 +    DESTINATION include

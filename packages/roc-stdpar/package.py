@@ -45,6 +45,7 @@ class RocStdpar(CMakePackage):
     # FIXME: Add dependencies if required.
     depends_on("intel-tbb@:2020.3")
 
+    depends_on("rocthrust")
 
     depends_on("llvm@roc-stdpar+clang~gold",
                 patches="CLANG_LLVM.patch",)
@@ -56,9 +57,11 @@ class RocStdpar(CMakePackage):
     #     make()
     #     make("install")
 
+
     def cmake_args(self):
         args = []
 
         args += [self.define("CMAKE_CXX_COMPILER", "{0}/bin/clang++".format(self.spec["llvm"].prefix))]
+        args += [self.define("CMAKE_C_COMPILER", "{0}/bin/clang".format(self.spec["llvm"].prefix))]
 
         return args
