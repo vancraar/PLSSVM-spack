@@ -346,6 +346,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     depends_on("boost@1.73.0:+atomic" , when="stdparimplementation=gnu-tbb")
     depends_on("boost@1.73.0:" , when="stdparimplementation=nvhpc")
     depends_on("boost@1.73.0:" , when="stdparimplementation=roc")
+    depends_on("rocthrust" , when="stdparimplementation=roc")
+    depends_on("rocprim" , when="stdparimplementation=roc")
 
     # depends_on("    llvm@roc-stdpar+clang~gold",
     #             patches="CLANG_LLVM.patch",
@@ -394,6 +396,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         depends_on("dpcpp@2023-03:+openmp +rocm rocm-platform=AMD",
                    when="+dpcpp sycl_target_arch={0}".format(amdgpu_arch))
 
+    depends_on("adaptivecpp +stdpar", when="+stdpar stdparimplementation=adaptivecpp")
 
     # SYCL CUDA/HIP backends require target arch informations to
     # set the correct flags later on:
@@ -427,7 +430,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
         #args += [self.define("PLSSVM_ENABLE_TESTING", self.run_tests)]
         args += [self.define_from_variant("PLSSVM_ENABLE_TESTING", "test")]
-        args += [self.define_from_variant("PLSSVM_TEST_WITH_REDUCED_LABEL_TYPES", "reducing_label_types")]
+        if "+test" in self.spec:
+            args += [self.define_from_variant("PLSSVM_TEST_WITH_REDUCED_LABEL_TYPES", "reducing_label_types")]
         args += [self.define_from_variant("PLSSVM_ENABLE_ASSERTS", "asserts")]
         args += [self.define_from_variant("PLSSVM_ENABLE_LANGUAGE_BINDINGS", "python")]
         if "+python" in self.spec:
