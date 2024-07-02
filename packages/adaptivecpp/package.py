@@ -126,9 +126,9 @@ class Adaptivecpp(CMakePackage):
         args += [self.define_from_variant("WITH_SSCP_COMPILER", "generic")]
         args += [self.define_from_variant("WITH_SDTPAR_COMPILER", "stdpar")]
         if "+omp-library-only" in self.spec or "+omp-accelerated" in self.spec or "+generic" in self.spec:
-            args += [self.define("WITH_CPU_BACKEND", "ON")]
+            args += [self.define("WITH_ACCELERATED_CPU", "ON")]
         else:
-            args += [self.define("WITH_CPU_BACKEND", "OFF")]
+            args += [self.define("WITH_ACCELERATED_CPU", "OFF")]
 
         # args += [self.define("CMAKE_CXX_COMPILER", "{0}/bin/clang++".format(self.spec["llvm"].prefix))]
         # args += [self.define("CMAKE_C_COMPILER", "{0}/bin/clang".format(self.spec["llvm"].prefix))]
