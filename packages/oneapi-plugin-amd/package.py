@@ -42,12 +42,12 @@ class OneapiPluginAmd(Package):
 
     def url_for_version(self, version):
         url = "https://developer.codeplay.com/api/v1/products/download?product=oneapi&variant=amd&version={0}&filters[]={1}&filters[]=linux"
-        # return url.format(version.up_to(3), str(version).split("-")[1])
-        return url.format("2024.1.0", "5.4.3")
+        return url.format(version.up_to(3), str(version).split("-")[1])
+        # return url.format("2024.1.0", "5.4.3")
 
     version("2024.1.0.5.4.3", sha256="b045a6c108d4699a3bb2a6e487e85d393decd6334e93bbb715cb770617287119", expand=False)
     # version("2024.1.0-4.5.2", )
-    version("2024.0.2-5.4.3", sha256="ccc173e1c7eced6793aa81bfdf12608eed1e83c077e48485b0e770688451bc8e", expand=False)
+    version("2024.0.2-5.4.3", sha256="3608fdf41161257b3230bfa62b0c207b8c5ee5784f1ef3744a4ec9ce80eabf52", expand=False)
     # version("2024.0.2-4.5.2", )
     # version("2024.0.1-5.4.3", )
     # version("2024.0.1-4.5.2", )
@@ -74,7 +74,7 @@ class OneapiPluginAmd(Package):
 
         # install_script= EXECUTABLE("./download?product=oneapi&variant=amd&version=2024.1.0&filters[]=5.4.3&filters[]=linux")
         # exe = "./download?product=oneapi&variant=amd&version={0}&filters[]={1}&filters[]=linux".format(self.version.up_to(3), str(self.version).split("-")[1])
-        exe = "./download?product=oneapi&variant=amd&version={0}&filters[]={1}&filters[]=linux".format("2024.1.0", "5.4.3")
+        exe = "./download?product=oneapi&variant=amd&version={0}&filters[]={1}&filters[]=linux".format(self.version.up_to(3), str(self.version).split("-")[1])
         Executable("chmod")("+x",exe)
         install_script= Executable(exe)
         # install_script("-y","-i","{0}".format(self.spec["intel-oneapi-compilers"].prefix),ignore_quotes=True)
