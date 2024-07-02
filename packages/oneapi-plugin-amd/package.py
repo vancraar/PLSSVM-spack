@@ -47,7 +47,7 @@ class OneapiPluginAmd(Package):
 
     version("2024.1.0.5.4.3", sha256="b045a6c108d4699a3bb2a6e487e85d393decd6334e93bbb715cb770617287119", expand=False)
     # version("2024.1.0-4.5.2", )
-    # version("2024.0.2-5.4.3", )
+    version("2024.0.2-5.4.3", sha256="ccc173e1c7eced6793aa81bfdf12608eed1e83c077e48485b0e770688451bc8e", expand=False)
     # version("2024.0.2-4.5.2", )
     # version("2024.0.1-5.4.3", )
     # version("2024.0.1-4.5.2", )
@@ -55,8 +55,8 @@ class OneapiPluginAmd(Package):
     # FIXME: Add dependencies if required.
     # depends_on("foo")
 
-    depends_on("intel-oneapi-compilers@2024.1.0")
-    # depends_on("intel-oneapi-compilers@2024.0.2", when="@2024.0.2")
+    depends_on("intel-oneapi-compilers@2024.1.0", when="@2024.1.0")
+    depends_on("intel-oneapi-compilers@2024.0.2", when="@2024.0.2")
     # depends_on("intel-oneapi-compilers@2024.0.1", when="@2024.0.1")
 
     depends_on("hip@5.4.3")
