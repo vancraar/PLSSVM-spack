@@ -80,4 +80,4 @@ class OneapiPluginAmd(Package):
         exe = "./download?product=oneapi&variant=amd&version={0}&filters[]={1}&filters[]=linux".format(self.version.up_to(3), "6.1.0")
         Executable("chmod")("+x",exe)
         install_script= Executable(exe)
-        # install_script("-y","-i","{0}".format(self.spec["intel-oneapi-compilers"].prefix),ignore_quotes=True)
+        install_script("-y","-i","{0}".format(self.spec["intel-oneapi-compilers"].prefix),ignore_quotes=True)
