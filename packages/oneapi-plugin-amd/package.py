@@ -56,8 +56,10 @@ class OneapiPluginAmd(Package):
     # FIXME: Add dependencies if required.
     # depends_on("foo")
 
-    depends_on("intel-oneapi-compilers@2024.1.0", when="@2024.1.0")
-    depends_on("intel-oneapi-compilers@2024.0.2", when="@2024.0.2")
+    depends_on("intel-oneapi-compilers@2024.2.0", when="@2024.2.0")
+
+    # depends_on("intel-oneapi-compilers@2024.1.0", when="@2024.1.0")
+    # depends_on("intel-oneapi-compilers@2024.0.2", when="@2024.0.2")
     # depends_on("intel-oneapi-compilers@2024.0.1", when="@2024.0.1")
 
     depends_on("hip@6.1.0")
