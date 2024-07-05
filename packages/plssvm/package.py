@@ -439,6 +439,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
             args += [self.define_from_variant("PLSSVM_ENABLE_PYTHON_BINDINGS", "python")]
 
         args += [self.define_from_variant("PLSSVM_ENABLE_DOCUMENTATION", "documentation")]
+        args += [self.define_from_variant("PLSSVM_ENABLE_FAST_MATH", "fast-math")]
 
         if "+test" in self.spec:
             args += [self.define_from_variant("PLSSVM_GENERATE_TEST_FILE", "test_file")]
