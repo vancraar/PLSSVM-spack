@@ -331,7 +331,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     conflicts("nvhpc@24.5", msg="nvhpc 24.5 is not supported")
     conflicts("nvhpc@24.4", msg="nvhpc 24.4 is not supported")
     conflicts("stdparimplementation=nvhpc", when="~reducing_label_types", msg="nvhpc does not support long double in GPU kernel code")
-    depends_on("adaptivecpp ^hip@6.1.0:", when="+adaptivecpp") # TODO fix in adaptivecpp package
+    depends_on("adaptivecpp", when="+adaptivecpp") # TODO fix in adaptivecpp package
     depends_on("adaptivecpp", when="stdparimplementation=adaptivecpp")
     depends_on("intel-tbb@:2020.3", when="stdparimplementation=adaptivecpp")
     depends_on("intel-tbb@:2020.3", when="stdparimplementation=gnu-tbb")
