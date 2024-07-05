@@ -42,12 +42,13 @@ class OneapiPluginAmd(Package):
 
     def url_for_version(self, version):
         url = "https://developer.codeplay.com/api/v1/products/download?product=oneapi&variant=amd&version={0}&filters[]={1}&filters[]=linux"
-        return url.format(version.up_to(3), str(version).split("-")[1])
+        return url.format(version.up_to(3), "6.1.0")
         # return url.format("2024.1.0", "5.4.3")
 
-    version("2024.1.0.5.4.3", sha256="b045a6c108d4699a3bb2a6e487e85d393decd6334e93bbb715cb770617287119", expand=False)
+    version("2024.2.0", sha256="d1e9d30fa92f3ef606f054d8cbd7c338b3e46f6a9f8472736e29e8ccd9e50688", expand=False)
+    # version("2024.1.0.5.4.3", sha256="b045a6c108d4699a3bb2a6e487e85d393decd6334e93bbb715cb770617287119", expand=False)
     # version("2024.1.0-4.5.2", )
-    version("2024.0.2-5.4.3", sha256="3608fdf41161257b3230bfa62b0c207b8c5ee5784f1ef3744a4ec9ce80eabf52", expand=False)
+    # version("2024.0.2-5.4.3", sha256="3608fdf41161257b3230bfa62b0c207b8c5ee5784f1ef3744a4ec9ce80eabf52", expand=False)
     # version("2024.0.2-4.5.2", )
     # version("2024.0.1-5.4.3", )
     # version("2024.0.1-4.5.2", )
@@ -59,7 +60,7 @@ class OneapiPluginAmd(Package):
     depends_on("intel-oneapi-compilers@2024.0.2", when="@2024.0.2")
     # depends_on("intel-oneapi-compilers@2024.0.1", when="@2024.0.1")
 
-    depends_on("hip@5.4.3")
+    depends_on("hip@6.1.0")
     # depends_on("hip@5.4.3", when="@2024.0.2-5.4.3")
     # depends_on("hip@5.4.3", when="@2024.0.1-5.4.3")
 
@@ -74,7 +75,7 @@ class OneapiPluginAmd(Package):
 
         # install_script= EXECUTABLE("./download?product=oneapi&variant=amd&version=2024.1.0&filters[]=5.4.3&filters[]=linux")
         # exe = "./download?product=oneapi&variant=amd&version={0}&filters[]={1}&filters[]=linux".format(self.version.up_to(3), str(self.version).split("-")[1])
-        exe = "./download?product=oneapi&variant=amd&version={0}&filters[]={1}&filters[]=linux".format(self.version.up_to(3), "5.4.3")
+        exe = "./download?product=oneapi&variant=amd&version={0}&filters[]={1}&filters[]=linux".format(self.version.up_to(3), "6.1.0")
         Executable("chmod")("+x",exe)
         install_script= Executable(exe)
         # install_script("-y","-i","{0}".format(self.spec["intel-oneapi-compilers"].prefix),ignore_quotes=True)
