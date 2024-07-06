@@ -51,7 +51,7 @@ class OneapiPluginNvidia(Package):
     version("2024.0.1-12.0", )
 
 
-    depends_on("intel-oneapi-compilers@2024.1.2", when="@2024.2.0")
+    depends_on("intel-oneapi-compilers@2024.2.0", when="@2024.2.0")
     depends_on("intel-oneapi-compilers@2024.1.2", when="@2024.1.2")
     depends_on("intel-oneapi-compilers@2024.1.0", when="@2024.1.0")
     depends_on("intel-oneapi-compilers@2024.0.2", when="@2024.0.2")
