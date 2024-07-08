@@ -341,7 +341,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     depends_on("intel-oneapi-compilers", when="stdparimplementation=icpx")
     depends_on("intel-oneapi-tbb", when="+icpx")
     depends_on("intel-tbb@:2020.3", when="stdparimplementation=icpx")
-    depends_on("intel-oneapi-dpl", when="stdparimplementation=icpx")
+    depends_on("intel-oneapi-dpl@:2022.3.0", when="stdparimplementation=icpx")
 
     depends_on("boost@1.73.0:+atomic" , when="stdparimplementation=gnu-tbb")
     depends_on("boost@1.73.0:" , when="stdparimplementation=nvhpc")
