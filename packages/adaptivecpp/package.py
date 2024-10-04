@@ -74,7 +74,7 @@ class Adaptivecpp(CMakePackage):
     conflicts("%gcc") #TODO enable omp-library-only with gcc
 
 
-    depends_on("llvm@:17.0.6") # remove if bug with llvm 18 is fixed
+    depends_on("llvm") # remove if bug with llvm 18 is fixed
 
     # FIXME: Add dependencies if required.
     depends_on("python@3:")
