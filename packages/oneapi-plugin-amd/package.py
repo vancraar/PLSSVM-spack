@@ -62,7 +62,7 @@ class OneapiPluginAmd(Package):
     # depends_on("intel-oneapi-compilers@2024.0.2", when="@2024.0.2")
     # depends_on("intel-oneapi-compilers@2024.0.1", when="@2024.0.1")
 
-    depends_on("hip@6.1.0")
+    depends_on("hip@6.2.0")
     # depends_on("hip@5.4.3", when="@2024.0.2-5.4.3")
     # depends_on("hip@5.4.3", when="@2024.0.1-5.4.3")
 
