@@ -91,13 +91,14 @@ class Adaptivecpp(CMakePackage):
     depends_on("cuda@10:", when="+cuda")
 
     depends_on("hip@5.3:", when="+rocm+generic")
-    depends_on("llvm@:14", when="hip@:5.0") #TODO Version
-    depends_on("llvm@:15", when="hip@:5.2") #TODO Version
-    depends_on("llvm@:16", when="hip@:5.4") #TODO Version
-    depends_on("llvm@:17", when="hip@:6.0") #TODO Version
+    depends_on("llvm@14:", when="hip@5.0:") #TODO Version
+    depends_on("llvm@15:", when="hip@5.2:") #TODO Version
+    depends_on("llvm@16:", when="hip@5.4:") #TODO Version
+    depends_on("llvm@17:", when="hip@6.0:") #TODO Version
+    depends_on("llvm@18:", when="hip@6.2:") #TODO Version
     # depends_on("llvm compiler-rt=project    ", when="+rocm+generic")
 
-    depends_on("llvm@:17 targets=amdgpu", when="+rocm")
+
 
 
     depends_on("llvm@14: +clang+llvm_dylib", when="+generic")
