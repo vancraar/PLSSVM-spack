@@ -41,6 +41,7 @@ class Adaptivecpp(CMakePackage):
     license("BSD-2-Clause", checked_by="vancraar")
 
     # FIXME: Add proper versions and checksums here.
+    version("24.06.0", commit="fc51dae9006d6858fc9c33148cc5f935bb56b075", submodules=True)
     version("24.02.0", commit="974adc33ea5a35dd8b5be68c7a744b37482b8b64", submodules=True)
     version("23.10.0", commit="3952b468c9da89edad9dff953cdcab0a3c3bf78c", submodules=True)
 

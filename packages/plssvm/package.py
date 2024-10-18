@@ -396,7 +396,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         depends_on("dpcpp@2023-03:+openmp +rocm rocm-platform=AMD",
                    when="+dpcpp sycl_target_arch={0}".format(amdgpu_arch))
 
-    depends_on("adaptivecpp +stdpar", when="+stdpar stdparimplementation=adaptivecpp")
+    depends_on("adaptivecpp@24.06.02 +stdpar", when="+stdpar stdparimplementation=adaptivecpp")
 
     # SYCL CUDA/HIP backends require target arch informations to
     # set the correct flags later on:
