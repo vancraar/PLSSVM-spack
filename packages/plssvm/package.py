@@ -514,9 +514,9 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         if "+cuda" in self.spec:
             args += [self.define("PLSSVM_CUDA_TARGET_PLATFORMS", ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)])]
         if "+hip" in self.spec:
-            if self.spec.variants["cuda_arch"].value != "none":
+            if not "none" in self.spec.variants["cuda_arch"].value:
                 args += [self.define("PLSSVM_HIP_TARGET_PLATFORMS", ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)])]
-            if  self.spec.variants["amdgpu_target"].value != "none":
+            if not "none" in  self.spec.variants["amdgpu_target"].value:
                 args += [self.define("PLSSVM_HIP_TARGET_PLATFORMS", ["amd:" + ",".join(self.spec.variants["amdgpu_target"].value)])]
         if "+adaptivecpp" in self.spec:
             args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", ";".join(target_arch))]
