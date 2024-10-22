@@ -116,7 +116,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     variant(
         "amdgpu_target",
         description="HIP GPU architecture",
-        values=ROCmPackage.amdgpu_targets,
+        values=list(ROCmPackage.amdgpu_targets)+list(["none"]),
         default=amd_arch()[0],
         multi=True,
         sticky=True,
@@ -388,7 +388,9 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         depends_on("adaptivecpp+cuda", when="+adaptivecpp cuda_arch={0}".format(cuda_arch))
         depends_on("oneapi-plugin-nvidia", when="+icpx cuda_arch={0}".format(cuda_arch))
         depends_on("oneapi-plugin-nvidia", when="+stdpar stdparimplementation=icpx cuda_arch={0}".format(cuda_arch))
+        depends_on("hip+cuda~rocm", when="+hip cuda_arch={0}".format(cuda_arch))
     for amdgpu_arch in ROCmPackage.amdgpu_targets:
+        depends_on("hip+rocm", when="+hip amdgpu_target={0}".format(amdgpu_arch))
         depends_on("rocm-opencl", when="+opencl amdgpu_target={0}".format(amdgpu_arch))
         depends_on("adaptivecpp+rocm", when="+adaptivecpp amdgpu_target={0}".format(amdgpu_arch))
         depends_on("oneapi-plugin-amd", when="+icpx amdgpu_target={0}".format(amdgpu_arch))
@@ -512,7 +514,10 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         if "+cuda" in self.spec:
             args += [self.define("PLSSVM_CUDA_TARGET_PLATFORMS", ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)])]
         if "+hip" in self.spec:
-            args += [self.define("PLSSVM_HIP_TARGET_PLATFORMS", ["amd:" + ",".join(self.spec.variants["amdgpu_target"].value)])]
+            if self.spec.variants["cuda_arch"].value != "none"
+                args += [self.define("PLSSVM_HIP_TARGET_PLATFORMS", ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)])]
+            if  self.spec.variants["amdgpu_target"].value != "none":
+                args += [self.define("PLSSVM_HIP_TARGET_PLATFORMS", ["amd:" + ",".join(self.spec.variants["amdgpu_target"].value)])]
         if "+adaptivecpp" in self.spec:
             args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", ";".join(target_arch))]
 
