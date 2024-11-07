@@ -337,6 +337,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     depends_on("adaptivecpp +stdpar", when="stdparimplementation=adaptivecpp")
     depends_on("intel-tbb@:2020.3", when="stdparimplementation=adaptivecpp")
     depends_on("intel-tbb@:2020.3", when="stdparimplementation=gnu-tbb")
+    depends_on("intel-tbb@:2020.3", when="stdparimplementation=icpx")
     depends_on("llvm ~gold", when="+adaptivecpp") # TODO: remove ~gold if llvm compiles without it
 
     depends_on("intel-oneapi-compilers@2024.2.0", when="+icpx")
@@ -418,7 +419,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
     def setup_build_environment(self, env):
         try:
-            env.set('OCL_ICD_FILENAMES',  self.spec['intel-oneapi-compilers'].prefix + "/lib/libintelocl.so")
+            env.append_path('LD_LIBRARY_PATH',self.spec['intel-oneapi-compilers'].prefix + "/tbb/latest/lib/intel64/gcc4.8" )
         except KeyError:
             pass
 
