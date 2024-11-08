@@ -512,7 +512,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
             target_arch += ["amd:" + ",".join(self.spec.variants["amdgpu_target"].value)]
 
         if "+stdpar" in self.spec:
-            if target_arch == [] or "gnu-tbb" in self.spec.variants["stdparimplementation"].value:
+            if not target_arch  or "gnu-tbb" in self.spec.variants["stdparimplementation"].value:
                 args += [self.define("PLSSVM_STDPAR_TARGET_PLATFORMS", "cpu")]
             else:
                 args += [self.define("PLSSVM_STDPAR_TARGET_PLATFORMS", ";".join(target_arch))]
