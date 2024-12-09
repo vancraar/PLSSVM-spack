@@ -171,6 +171,16 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         when="+stdpar",
     )
 
+    variant(
+        "cuda_arch",
+        description="CUDA architecture",
+        values=supported_cuda_archs+["none"],
+        default=default_cuda_arch(supported_cuda_archs)[0],
+        multi=True,
+        sticky=True,
+        when="+kokkos",
+    )
+
 
     variant(
         "amdgpu_target",
@@ -209,6 +219,16 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         multi=True,
         sticky=True,
         when="+stdpar",
+    )
+
+    variant(
+        "amdgpu_target",
+        description="HIP GPU architecture",
+        values=list(ROCmPackage.amdgpu_targets)+list(["none"]),
+        default=amd_arch()[0],
+        multi=True,
+        sticky=True,
+        when="+kokkos",
     )
 
 
@@ -259,6 +279,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     conflicts("+stdpar", when="+cuda", msg="CUDA backend is not compatible with stdpar backend.")
     conflicts("+stdpar", when="+hip", msg="HIP backend is not compatible with stdpar backend.")
     conflicts("+stdpar", when="+openmp", msg="OpenMP backend is not compatible with stdpar backend.")
+    conflicts("+stdpar", when="+kokkos", msg="Kokkos backend is not compatible with stdpar backend.")
+    conflicts("+stdpar", when="+hpx", msg="HPX backend is not compatible with stdpar backend.")
 
 
 
@@ -276,6 +298,10 @@ class Plssvm(CMakePackage,CudaPackage,  ):
      msg="PLSSVM requires at least one backend to be enabled")
 
     default_sycl_target_arch=default_cuda_arch(supported_cuda_archs)[0]
+
+    variant("hpx", default=False, description="Enable HPX support")
+
+    variant("kokkos", default=False, description="Enable Kokkos support") # TODO: intel GPUs
     # if "none" in default_sycl_target_arch:
     #     default_sycl_target_arch=amd_arch()[0]
 
@@ -394,6 +420,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         depends_on("oneapi-plugin-nvidia", when="+stdpar stdparimplementation=icpx cuda_arch={0}".format(cuda_arch))
         depends_on("hip+cuda~rocm", when="+hip cuda_arch={0}".format(cuda_arch))
         depends_on("cuda", when="+hip cuda_arch={0}".format(cuda_arch))
+        depends_on("kokkos+cuda cuda_arch={0}".format(cuda_arch), when="+kokkos cuda_arch={0}".format(cuda_arch))
     for amdgpu_arch in ROCmPackage.amdgpu_targets:
         depends_on("hip+rocm", when="+hip amdgpu_target={0}".format(amdgpu_arch))
         depends_on("rocm-opencl", when="+opencl amdgpu_target={0}".format(amdgpu_arch))
@@ -402,8 +429,14 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         depends_on("oneapi-plugin-amd", when="+icpx stdparimplementation=icpx amdgpu_target={0}".format(amdgpu_arch))
         depends_on("dpcpp@2023-03:+openmp +rocm rocm-platform=AMD",
                    when="+dpcpp amdgpu_target={0}".format(amdgpu_arch))
+        depends_on("kokkos+rocm amdgpu_target={0}".format(amdgpu_arch), when="+kokkos amdgpu_target={0}".format(amdgpu_arch))
 
     depends_on("adaptivecpp@24.06.00 +stdpar", when="+stdpar stdparimplementation=adaptivecpp")
+
+    depends_on("hpx@1.9.1", when="+hpx")
+
+    depends_on("kokkos+openmp+serial", when="+kokkos")
+    depends_on("kokkos+sycl", when="%oneapi +kokkos")
 
     # SYCL CUDA/HIP backends require target arch informations to
     # set the correct flags later on:
@@ -529,8 +562,15 @@ class Plssvm(CMakePackage,CudaPackage,  ):
                 args += [self.define("PLSSVM_HIP_TARGET_PLATFORMS", ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)])]
             if not "none" in  self.spec.variants["amdgpu_target"].value:
                 args += [self.define("PLSSVM_HIP_TARGET_PLATFORMS", ["amd:" + ",".join(self.spec.variants["amdgpu_target"].value)])]
+        if "+kokkos" in self.spec:
+            if not "none" in self.spec.variants["cuda_arch"].value:
+                args += [self.define("PLSSVM_KOKKOS_TARGET_PLATFORMS", ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)])]
+            if not "none" in  self.spec.variants["amdgpu_target"].value:
+                args += [self.define("PLSSVM_KOKKOS_TARGET_PLATFORMS", ["amd:" + ",".join(self.spec.variants["amdgpu_target"].value)])]
         if "+adaptivecpp" in self.spec:
             args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", ";".join(target_arch))]
+        if "+hpx" in self.spec:
+            args += [self.define("PLSSVM_HPX_TARGET_PLATFORMS", "cpu")]
 
 
 
@@ -579,6 +619,9 @@ class Plssvm(CMakePackage,CudaPackage,  ):
             if "stdparimplementation=gnu-tbb" in self.spec:
                 requires("%gcc", msg="GNU TBB backend requires GCC")
                 args += [self.define("TBB_ROOT", "{0}".format(self.spec["tbb"].prefix))]
+
+        args += [self.define_from_variant("PLSSVM_ENABLE_HPX_BACKEND", "hpx")]
+        args += [self.define_from_variant("PLSSVM_ENABLE_KOKKOS_BACKEND", "kokkos")]
 
 
         return args
