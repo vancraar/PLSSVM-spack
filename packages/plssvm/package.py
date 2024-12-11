@@ -293,7 +293,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     requires("cuda_arch=none", when="stdparimplementation=roc")
     requires("amdgpu_target=none", when="stdparimplementation=nvhpc")
 
-    requires("+cuda", "+hip", "+adaptivecpp", "+dpcpp", "+stdpar", "+openmp", "+opencl", "+icpx",
+    requires("+cuda", "+hip", "+adaptivecpp", "+dpcpp", "+stdpar", "+openmp", "+opencl", "+icpx", "+hpx", "+kokkos",
      policy="any_of",
      msg="PLSSVM requires at least one backend to be enabled")
 
