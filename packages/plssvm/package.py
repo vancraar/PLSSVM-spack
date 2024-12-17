@@ -366,7 +366,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     depends_on("intel-tbb@:2020.3", when="stdparimplementation=icpx")
     depends_on("llvm ~gold", when="+adaptivecpp") # TODO: remove ~gold if llvm compiles without it
 
-    depends_on("intel-oneapi-compilers@2024.2.0", when="+icpx")
+    depends_on("intel-oneapi-compilers@2025.0.0", when="+icpx")
     depends_on("intel-oneapi-compilers", when="stdparimplementation=icpx")
     depends_on("intel-oneapi-tbb", when="+icpx")
     depends_on("intel-tbb@:2020.3", when="stdparimplementation=icpx")

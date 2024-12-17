@@ -44,6 +44,7 @@ class OneapiPluginNvidia(Package):
         url = "https://developer.codeplay.com/api/v1/products/download?product=oneapi&variant=nvidia&version={0}&filters[]={1}&filters[]=linux"
         return url.format(version.up_to(3), str(version).split("-")[1])
 
+    version("2024.5.0-12.0", sha256="264a43d2e07c08eb31d6483fb1c289a6b148709e48e9a250efc1b1e9a527feb6",expand=False)
     version("2024.2.0-12.0", sha256="0622df0054364b01e91e7ed72a33cb3281e281db5b0e86579f516b1cc5336b0f",expand=False)
     version("2024.1.2-12.0", sha256="5a0d1e5eeee5713b6f7c259ef87c044ab4e1bf7bb0b4651da9cde81fd16e43bc",expand=False)
     version("2024.1.0-12.0", sha256="36560ed0f2af951241d7551134b52902efd13abb249922e661dd0913f098ceca",expand=False)
@@ -51,12 +52,14 @@ class OneapiPluginNvidia(Package):
     version("2024.0.1-12.0", )
 
 
+    depends_on("intel-oneapi-compilers@2025.0.0", when="@2025.0.0")
     depends_on("intel-oneapi-compilers@2024.2.0", when="@2024.2.0")
     depends_on("intel-oneapi-compilers@2024.1.2", when="@2024.1.2")
     depends_on("intel-oneapi-compilers@2024.1.0", when="@2024.1.0")
     depends_on("intel-oneapi-compilers@2024.0.2", when="@2024.0.2")
     depends_on("intel-oneapi-compilers@2024.0.1", when="@2024.0.1")
 
+    depends_on("cuda@12.0", when="@2024.5.0-12.0")
     depends_on("cuda@12.0", when="@2024.2.0-12.0")
     depends_on("cuda@12.0", when="@2024.1.2-12.0")
     depends_on("cuda@12.0", when="@2024.1.0-12.0")
