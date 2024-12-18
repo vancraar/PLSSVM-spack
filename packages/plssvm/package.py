@@ -367,7 +367,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     depends_on("llvm ~gold", when="+adaptivecpp") # TODO: remove ~gold if llvm compiles without it
 
     depends_on("intel-oneapi-compilers@2025.0.0", when="+icpx")
-    depends_on("intel-oneapi-compilers", when="stdparimplementation=icpx")
+    depends_on("intel-oneapi-compilers@2024.2.0", when="stdparimplementation=icpx")
     depends_on("intel-oneapi-tbb", when="+icpx")
     depends_on("intel-tbb@:2020.3", when="stdparimplementation=icpx")
     depends_on("intel-oneapi-dpl@:2022.3.0", when="stdparimplementation=icpx")
@@ -416,8 +416,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
                    when="+dpcpp cuda_arch={0}".format(cuda_arch))
         depends_on("cuda", when="+opencl cuda_arch={0}".format(cuda_arch))
         depends_on("adaptivecpp+cuda", when="+adaptivecpp cuda_arch={0}".format(cuda_arch))
-        depends_on("oneapi-plugin-nvidia", when="+icpx cuda_arch={0}".format(cuda_arch))
-        depends_on("oneapi-plugin-nvidia", when="+stdpar stdparimplementation=icpx cuda_arch={0}".format(cuda_arch))
+        depends_on("intel-oneapi-compilers+nvidia", when="+icpx cuda_arch={0}".format(cuda_arch))
+        depends_on("intel-oneapi-compilers+nvidia", when="+stdpar stdparimplementation=icpx cuda_arch={0}".format(cuda_arch))
         depends_on("hip+cuda~rocm", when="+hip cuda_arch={0}".format(cuda_arch))
         depends_on("cuda", when="+hip cuda_arch={0}".format(cuda_arch))
         depends_on("kokkos+cuda cuda_arch={0}".format(cuda_arch), when="+kokkos cuda_arch={0}".format(cuda_arch))
@@ -425,8 +425,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         depends_on("hip+rocm", when="+hip amdgpu_target={0}".format(amdgpu_arch))
         depends_on("rocm-opencl", when="+opencl amdgpu_target={0}".format(amdgpu_arch))
         depends_on("adaptivecpp+rocm", when="+adaptivecpp amdgpu_target={0}".format(amdgpu_arch))
-        depends_on("oneapi-plugin-amd", when="+icpx amdgpu_target={0}".format(amdgpu_arch))
-        depends_on("oneapi-plugin-amd", when="+icpx stdparimplementation=icpx amdgpu_target={0}".format(amdgpu_arch))
+        depends_on("intel-oneapi-compilers+amd", when="+icpx amdgpu_target={0}".format(amdgpu_arch))
+        depends_on("intel-oneapi-compilers+amd", when="+icpx stdparimplementation=icpx amdgpu_target={0}".format(amdgpu_arch))
         depends_on("dpcpp@2023-03:+openmp +rocm rocm-platform=AMD",
                    when="+dpcpp amdgpu_target={0}".format(amdgpu_arch))
         depends_on("kokkos+rocm amdgpu_target={0}".format(amdgpu_arch), when="+kokkos amdgpu_target={0}".format(amdgpu_arch))
