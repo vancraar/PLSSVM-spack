@@ -420,7 +420,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         depends_on("intel-oneapi-compilers+nvidia", when="+stdpar stdparimplementation=icpx cuda_arch={0}".format(cuda_arch))
         depends_on("hip+cuda~rocm", when="+hip cuda_arch={0}".format(cuda_arch))
         depends_on("cuda", when="+hip cuda_arch={0}".format(cuda_arch))
-        depends_on("kokkos+cuda cuda_arch={0}".format(cuda_arch), when="+kokkos cuda_arch={0}".format(cuda_arch))
+        depends_on("kokkos+cuda+wrapper%gcc cuda_arch={0}".format(cuda_arch), when="+kokkos cuda_arch={0}".format(cuda_arch))
+        conflicts("+lto", when="+kokkos cuda_arch={0}".format(cuda_arch), msg="kokkos Backend can not be build with lto")
     for amdgpu_arch in ROCmPackage.amdgpu_targets:
         depends_on("hip+rocm", when="+hip amdgpu_target={0}".format(amdgpu_arch))
         depends_on("rocm-opencl", when="+opencl amdgpu_target={0}".format(amdgpu_arch))
