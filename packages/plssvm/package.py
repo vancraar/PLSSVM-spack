@@ -431,7 +431,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
                    when="+dpcpp amdgpu_target={0}".format(amdgpu_arch))
         depends_on("kokkos+rocm amdgpu_target={0}".format(amdgpu_arch), when="+kokkos amdgpu_target={0}".format(amdgpu_arch))
 
-    depends_on("adaptivecpp@24.06.00: +stdpar", when="+stdpar stdparimplementation=adaptivecpp")
+    depends_on("adaptivecpp@24.10.00: +stdpar", when="+stdpar stdparimplementation=adaptivecpp")
 
     depends_on("hpx@1.9.1", when="+hpx")
 
