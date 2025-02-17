@@ -538,7 +538,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
 
 
-        target_arch = []
+        target_arch = ["cpu"]
         if "cuda_arch" in self.spec.variants and  not "none" in self.spec.variants["cuda_arch"].value:
             target_arch += ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)]
         if "amdgpu_target" in self.spec.variants and not "none" in self.spec.variants["amdgpu_target"].value:
@@ -567,8 +567,25 @@ class Plssvm(CMakePackage,CudaPackage,  ):
                 args += [self.define("PLSSVM_KOKKOS_TARGET_PLATFORMS", ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)])]
             if not "none" in  self.spec.variants["amdgpu_target"].value:
                 args += [self.define("PLSSVM_KOKKOS_TARGET_PLATFORMS", ["amd:" + ",".join(self.spec.variants["amdgpu_target"].value)])]
+        if "+icpx" in self.spec:
+            # Set compiler to icpx
+            args += [self.define("CMAKE_CXX_COMPILER", "{0}/compiler/latest/bin/icpx".format(self.spec["intel-oneapi-compilers"].prefix))]
+            # args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", "cpu:avx512" +";".join(target_arch))]
+            if "cpu" in target_arch:
+                target_arch.remove("cpu")
+            args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", ";".join(target_arch))]
+
+        if "+dpcpp" in self.spec:
+            # Set compiler to dpcpp
+            args += [self.define("CMAKE_CXX_COMPILER",
+                                 "{0}/bin/clang++".format(self.spec["dpcpp"].prefix))]
+            if "cpu" in target_arch:
+                target_arch.remove("cpu")
+
         if "+adaptivecpp" in self.spec:
             args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", ";".join(target_arch))]
+
+
         if "+hpx" in self.spec:
             args += [self.define("PLSSVM_HPX_TARGET_PLATFORMS", "cpu")]
 
