@@ -538,7 +538,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
 
 
-        target_arch = ["cpu"]
+        target_arch = []
         if "cuda_arch" in self.spec.variants and  not "none" in self.spec.variants["cuda_arch"].value:
             target_arch += ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)]
         if "amdgpu_target" in self.spec.variants and not "none" in self.spec.variants["amdgpu_target"].value:
@@ -549,6 +549,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
                 args += [self.define("PLSSVM_STDPAR_TARGET_PLATFORMS", "cpu")]
             else:
                 args += [self.define("PLSSVM_STDPAR_TARGET_PLATFORMS", ";".join(target_arch))]
+
+        target_arch += ["cpu"]
 
 
         if "+openmp" in self.spec:
