@@ -415,6 +415,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
                    when="+dpcpp cuda_arch={0}".format(cuda_arch))
         depends_on("cuda", when="+opencl cuda_arch={0}".format(cuda_arch))
         depends_on("adaptivecpp+cuda", when="+adaptivecpp cuda_arch={0}".format(cuda_arch))
+        depends_on("adaptivecpp@24.10.00: +stdpar +cuda", when="+stdpar stdparimplementation=adaptivecpp cuda_arch={0}".format(cuda_arch))
         depends_on("intel-oneapi-compilers+nvidia", when="+icpx cuda_arch={0}".format(cuda_arch))
         depends_on("intel-oneapi-compilers+nvidia", when="+stdpar stdparimplementation=icpx cuda_arch={0}".format(cuda_arch))
         depends_on("hip+cuda~rocm", when="+hip cuda_arch={0}".format(cuda_arch))
@@ -425,13 +426,13 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         depends_on("hip+rocm", when="+hip amdgpu_target={0}".format(amdgpu_arch))
         depends_on("rocm-opencl", when="+opencl amdgpu_target={0}".format(amdgpu_arch))
         depends_on("adaptivecpp+rocm", when="+adaptivecpp amdgpu_target={0}".format(amdgpu_arch))
+        depends_on("adaptivecpp@24.10.00: +stdpar +rocm", when="+stdpar stdparimplementation=adaptivecpp amdgpu_target={0}".format(amdgpu_arch))
         depends_on("intel-oneapi-compilers+amd", when="+icpx amdgpu_target={0}".format(amdgpu_arch))
         depends_on("intel-oneapi-compilers+amd", when="+icpx stdparimplementation=icpx amdgpu_target={0}".format(amdgpu_arch))
         depends_on("dpcpp@2023-03:+openmp +rocm rocm-platform=AMD",
                    when="+dpcpp amdgpu_target={0}".format(amdgpu_arch))
         depends_on("kokkos+rocm amdgpu_target={0}".format(amdgpu_arch), when="+kokkos amdgpu_target={0}".format(amdgpu_arch))
 
-    depends_on("adaptivecpp@24.10.00: +stdpar", when="+stdpar stdparimplementation=adaptivecpp")
 
     depends_on("hpx@1.9.1", when="+hpx")
 
