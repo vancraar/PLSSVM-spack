@@ -332,7 +332,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     depends_on("cxxopts@3.2.0")
     depends_on("igor@master")
     depends_on("fast-float@6.1.1")
-    depends_on("googletest@1.14.0:", when="+test")
+    depends_on("googletest@1.16.0:", when="+test")
 
     depends_on("cmake@3.23:", type="build")
     depends_on("opencl", when="+opencl")

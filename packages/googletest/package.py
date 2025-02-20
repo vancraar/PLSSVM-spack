@@ -16,6 +16,9 @@ class Googletest(CMakePackage):
     maintainers("sethrj")
 
     version("main", branch="main")
+    version("1.16.0", sha256="78c676fc63881529bf97bf9d45948d905a66833fbfa5318ea2cd7478cb98f399")
+    version("1.15.2", sha256="7b42b4d6ed48810c5362c265a17faebe90dc2373c885e5216439d37927f02926")
+    version("1.15.0", sha256="7315acb6bf10e99f332c8a43f00d5fbb1ee6ca48c52f6b936991b216c586aaad")
     version("1.14.0", sha256="8ad598c73ad796e0d8280b082cebd82a630d73e73cd3c70057938a6501bba5d7")
     version("1.13.0", sha256="ad7fdba11ea011c1d925b3289cf4af2c66a352e18d4c7264392fead75e919363")
     version("1.12.1", sha256="81964fe578e9bd7c94dfdb09c8e4d6e6759e19967e397dbea48d1c10e45d0df2")
@@ -27,14 +30,21 @@ class Googletest(CMakePackage):
     version("1.7.0", sha256="f73a6546fdf9fce9ff93a5015e0333a8af3062a152a9ad6bcb772c96687016cc")
     version("1.6.0", sha256="5fbc058e5b662b9c86d93ac76fefb58eec89cbf26144b49669a38ecb62758447")
 
+    depends_on("c", type="build")
+    depends_on("cxx", type="build")
+
+    variant("absl", default=False, when="@1.12.1:", description="Build with abseil and RE2")
+    depends_on("abseil-cpp", when="+absl")
+    depends_on("re2", when="+absl")
+
     variant("gmock", default=True, when="@1.8:", description="Build with gmock")
     variant("pthreads", default=True, description="Build multithreaded version with pthreads")
     variant("shared", default=True, description="Build shared libraries (DLLs)")
 
     variant(
         "cxxstd",
-        default="11",
-        values=("98", "11", "14", "17"),
+        default="14",
+        values=("98", "11", "14", "17", "20 "),
         multi=False,
         description="Use the specified C++ standard when building",
     )
