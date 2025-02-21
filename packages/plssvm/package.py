@@ -550,14 +550,14 @@ class Plssvm(CMakePackage,CudaPackage,  ):
                 args += [self.define("PLSSVM_STDPAR_TARGET_PLATFORMS", "cpu")]
             else:
                 args += [self.define("PLSSVM_STDPAR_TARGET_PLATFORMS", ";".join(target_arch))]
+        if "+opencl" in self.spec:
+            args += [self.define("PLSSVM_OPENCL_TARGET_PLATFORMS", ";".join(target_arch))] # TODO: add cpu if pocl is working
 
         target_arch += ["cpu"]
 
-
         if "+openmp" in self.spec:
             args += [self.define("PLSSVM_OPENMP_TARGET_PLATFORMS", "cpu")]
-        if "+opencl" in self.spec:
-            args += [self.define("PLSSVM_OPENCL_TARGET_PLATFORMS", ";".join(target_arch))] # TODO: add cpu if pocl is working
+
         if "+cuda" in self.spec:
             args += [self.define("PLSSVM_CUDA_TARGET_PLATFORMS", ["nvidia:sm_" + ",sm_".join(self.spec.variants["cuda_arch"].value)])]
         if "+hip" in self.spec:
