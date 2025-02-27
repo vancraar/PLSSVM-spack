@@ -327,6 +327,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
      # TODO: variant cpu_target
 
     # FIXME: Add dependencies if required.
+    depends_on("cxx", type="build")
 
     depends_on("fmt@11.0.2")
     depends_on("cxxopts@3.2.0")
@@ -434,7 +435,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         depends_on("kokkos+rocm amdgpu_target={0}".format(amdgpu_arch), when="+kokkos amdgpu_target={0}".format(amdgpu_arch))
 
 
-    depends_on("hpx@1.9.1", when="+hpx")
+    depends_on("hpx@1.9.1:", when="+hpx")
 
     depends_on("kokkos+openmp+serial", when="+kokkos")
     depends_on("kokkos+sycl", when="%oneapi +kokkos")
