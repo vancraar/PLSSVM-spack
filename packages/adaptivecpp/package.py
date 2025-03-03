@@ -125,20 +125,29 @@ class Adaptivecpp(CMakePackage):
             args += [self.define("WITH_CUDA_BACKEND", "OFF")]
         if "+cuda-nvcxx" in self.spec:
             args += [self.define("NVCXX_COMPILER","{0}/bin/nvc++".format(self.spec["nvhpc"].prefix))]
-            args += [self.define("WITH_CUDA_NVCXX_ONLY", "ON")]
-        args += [self.define_from_variant("WITH_SSCP_COMPILER", "generic")]
-        args += [self.define_from_variant("WITH_SDTPAR_COMPILER", "stdpar")]
-        if "+omp-library-only" in self.spec or "+omp-accelerated" in self.spec or "+generic" in self.spec:
-            args += [self.define("WITH_ACCELERATED_CPU", "ON")]
+        if self.version <= Version("24.06.0"):
+            args += [self.define_from_variant("WITH_SSCP_COMPILER", "generic")]
+            args += [self.define_from_variant("WITH_SDTPAR_COMPILER", "stdpar")]
+            if "+omp-library-only" in self.spec or "+omp-accelerated" in self.spec or "+generic" in self.spec:
+                args += [self.define("WITH_ACCELERATED_CPU", "ON")]
+            else:
+                args += [self.define("WITH_ACCELERATED_CPU", "OFF")]
         else:
-            args += [self.define("WITH_ACCELERATED_CPU", "OFF")]
+            args += [self.define_from_variant("SSCP", "generic")]
+            args += [self.define_from_variant("stdpar", "stdpar")]
+            if "+omp-library-only" in self.spec or "+omp-accelerated" in self.spec or "+generic" in self.spec:
+                args += [self.define("accelerated cpu", "ON")]
+            else:
+                args += [self.define("accelerated cpu", "OFF")]
+
+
 
         # args += [self.define("CMAKE_CXX_COMPILER", "{0}/bin/clang++".format(self.spec["llvm"].prefix))]
         # args += [self.define("CMAKE_C_COMPILER", "{0}/bin/clang".format(self.spec["llvm"].prefix))]
         if "llvm-admgpu" in self.spec:
             args += [self.define("LLVM_DIR", "{0}".format(self.spec["llvm-admgpu"].prefix))]
         elif "llvm" in self.spec:
-            args += [self.define("LLVM_DIR", "{0}".format(self.spec["llvm"].prefix))]
+            args += [self.define("LLVM_DIR", "{0}/lib/cmake/llvm".format(self.spec["llvm"].prefix))]
 
         args += [self.define_from_variant("WITH_ROCM_BACKEND", "rocm")] #TODO
         args += [self.define_from_variant("WITH_OPENCL_BACKEND", "opencl")] #TODO
