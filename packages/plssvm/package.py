@@ -639,7 +639,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
             if "stdparimplementation=gnu-tbb" in self.spec:
                 requires("%gcc", msg="GNU TBB backend requires GCC")
-                args += [self.define("TBB_ROOT", "{0}".format(self.spec["tbb"].prefix))]
+                args += [self.define("TBB_ROOT", "{0}".format(self.spec["intel-tbb"].prefix))]
 
         args += [self.define_from_variant("PLSSVM_ENABLE_HPX_BACKEND", "hpx")]
         args += [self.define_from_variant("PLSSVM_ENABLE_KOKKOS_BACKEND", "kokkos")]
