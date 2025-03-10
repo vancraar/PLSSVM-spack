@@ -437,8 +437,9 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
 
 
-    depends_on("hpx@1.9.1:%gcc", when="%gcc+hpx")
-    depends_on("hpx@1.9.1:%clang", when="%clang+hpx")
+    depends_on("hpx%gcc", when="%gcc+hpx")
+    depends_on("hpx%clang", when="%clang+hpx")
+    depends_on("hpx@1.9.1:", when="+hpx")
 
     depends_on("kokkos+openmp+serial", when="+kokkos")
     depends_on("kokkos+sycl", when="%oneapi +kokkos")
