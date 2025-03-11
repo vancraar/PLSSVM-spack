@@ -404,6 +404,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
 
     conflicts("+icpx", when="+dpcpp", msg="Intel SYCL integration conflicts DPC++ SYCL integration.")
+    conflicts("+icpx", when="+cuda", msg="Intel SYCL integration conflicts CUDA integration. TODO: fix")
     conflicts("build_type=Debug", when="+fast-math", msg="Fast math optimizations are not allowed in debug mode.")
 
 
