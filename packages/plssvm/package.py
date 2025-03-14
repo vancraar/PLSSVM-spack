@@ -369,6 +369,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
     depends_on("intel-oneapi-compilers@2025.0.0", when="+icpx")
     depends_on("intel-oneapi-compilers@2024.2.0", when="stdparimplementation=icpx")
+    conflicts("intel-oneapi-compilers@2025.0.4+nvidia", msg="Intel oneAPI compilers 2025.0.4 cuda backend seems broken")
+
     depends_on("intel-oneapi-tbb", when="+icpx")
     depends_on("intel-tbb@:2020.3", when="stdparimplementation=icpx")
     depends_on("intel-oneapi-dpl@:2022.3.0", when="stdparimplementation=icpx")
@@ -404,7 +406,6 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
 
     conflicts("+icpx", when="+dpcpp", msg="Intel SYCL integration conflicts DPC++ SYCL integration.")
-    conflicts("+icpx", when="+cuda", msg="Intel SYCL integration conflicts CUDA integration. TODO: fix")
     conflicts("build_type=Debug", when="+fast-math", msg="Fast math optimizations are not allowed in debug mode.")
 
 
@@ -607,6 +608,9 @@ class Plssvm(CMakePackage,CudaPackage,  ):
             args += [self.define("CMAKE_CXX_COMPILER", "{0}/compiler/latest/bin/icpx".format(self.spec["intel-oneapi-compilers"].prefix))]
             # args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", "cpu:avx512" +";".join(target_arch))]
             args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", ";".join(target_arch))]
+            if "+cuda" in self.spec:
+                args += [self.define("CUDA_HOST_COMPILER", "icpx"), self.define("OpenMP_CXX_FLAGS", "-fopenmp"), self.define("OpenMP_CXX_LIB_NAMES", "libiomp5"), self.define("OpenMP_libiomp5_LIBRARY", "{0}/compiler/latest/lib/libiomp5.so".format(self.spec["intel-oneapi-compilers"].prefix))]
+
 
         if "+dpcpp" in self.spec:
             # Set compiler to dpcpp
