@@ -232,8 +232,13 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     )
 
 
-
-
+    with when("build_system=cmake"):
+        variant(
+                "build_type",
+                default="Release",
+                description="CMake build type",
+                values=("Debug", "Release", "RelWithDebInfo", "MinSizeRel", "Coverage"),
+            )
 
     variant("python", default=False, description="Build with Python Bindings")
     variant("python_preferred_label_type", default="std::string", when="+python", values=("bool","char","signed char","unsigned char","short","unsigned short","int","unsigned int","long","unsigned long","long long","unsigned long long","float","double","long double","std::string"), multi=False, description="Prefered label type for python bindings")
@@ -348,6 +353,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     depends_on("doxygen@1.9.8:+graphviz", when="+documentation")
 
     depends_on("py-scikit-learn", when="+test_file")
+    depends_on("py-scikit-learn") # TODO: check why needed
+    depends_on("py-humanize")  # TODO: check why needed
     depends_on("py-humanize", when="+test_file")
     depends_on("py-numpy", when="+test_file")
 
@@ -424,7 +431,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
         depends_on("intel-oneapi-compilers+nvidia", when="+stdpar stdparimplementation=icpx cuda_arch={0}".format(cuda_arch))
         depends_on("hip+cuda~rocm", when="+hip cuda_arch={0}".format(cuda_arch))
         depends_on("cuda", when="+hip cuda_arch={0}".format(cuda_arch))
-        depends_on("kokkos+cuda+wrapper%gcc cuda_arch={0}".format(cuda_arch), when="+kokkos cuda_arch={0}".format(cuda_arch))
+        depends_on("kokkos+cuda+wrapper cuda_arch={0} %gcc ".format(cuda_arch), when="+kokkos cuda_arch={0}".format(cuda_arch))
         conflicts("+lto", when="+kokkos cuda_arch={0}".format(cuda_arch), msg="kokkos Backend can not be build with lto")
     for amdgpu_arch in ROCmPackage.amdgpu_targets:
         depends_on("hip+rocm", when="+hip amdgpu_target={0}".format(amdgpu_arch))
@@ -469,7 +476,10 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     def build_targets(self):
         if "+documentation" in self.spec:
             return ["all","doc"]
+        if "build_type=Coverage" in self.spec:
+            return ["coverage"]
         return ["all"]
+
 
 
     def cmake_args(self):
