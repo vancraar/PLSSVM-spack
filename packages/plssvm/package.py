@@ -341,6 +341,10 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     depends_on("fast-float@6.1.1")
     depends_on("googletest@1.16.0:", when="+test")
 
+
+    requires("+test", when="build_type=Coverage")
+    requires("~lto", when="build_type=Coverage", msg="Coverage build requires LTO to be disabled")
+
     depends_on("cmake@3.23:", type="build")
     depends_on("opencl", when="+opencl")
 
