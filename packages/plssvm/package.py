@@ -597,6 +597,8 @@ class Plssvm(CMakePackage,CudaPackage,  ):
             # args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", "cpu:avx512" +";".join(target_arch))]
             if "cpu" in target_arch:
                 target_arch.remove("cpu")
+            if "+cuda" in self.spec:
+                args += [self.define("CUDA_HOST_COMPILER", "icpx"), self.define("OpenMP_CXX_FLAGS", "-fopenmp"), self.define("OpenMP_CXX_LIB_NAMES", "libiomp5"), self.define("OpenMP_libiomp5_LIBRARY", "{0}/compiler/latest/lib/libiomp5.so".format(self.spec["intel-oneapi-compilers"].prefix))]
             args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", ";".join(target_arch))]
 
         if "+dpcpp" in self.spec:
@@ -614,16 +616,6 @@ class Plssvm(CMakePackage,CudaPackage,  ):
             args += [self.define("PLSSVM_HPX_TARGET_PLATFORMS", "cpu")]
 
 
-
-
-        # SYCL support requires compiling with icpx clang
-        if "+icpx" in self.spec:
-            # Set compiler to icpx
-            args += [self.define("CMAKE_CXX_COMPILER", "{0}/compiler/latest/bin/icpx".format(self.spec["intel-oneapi-compilers"].prefix))]
-            # args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", "cpu:avx512" +";".join(target_arch))]
-            args += [self.define("PLSSVM_SYCL_TARGET_PLATFORMS", ";".join(target_arch))]
-            if "+cuda" in self.spec:
-                args += [self.define("CUDA_HOST_COMPILER", "icpx"), self.define("OpenMP_CXX_FLAGS", "-fopenmp"), self.define("OpenMP_CXX_LIB_NAMES", "libiomp5"), self.define("OpenMP_libiomp5_LIBRARY", "{0}/compiler/latest/lib/libiomp5.so".format(self.spec["intel-oneapi-compilers"].prefix))]
 
 
         if "+dpcpp" in self.spec:
