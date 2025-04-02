@@ -450,12 +450,12 @@ class Plssvm(CMakePackage,CudaPackage,  ):
 
 
 
-    depends_on("hpx%gcc", when="%gcc+hpx")
-    depends_on("hpx%clang", when="%clang+hpx")
+    depends_on("hpx%gcc", when="+hpx%gcc")
+    depends_on("hpx%clang", when="+hpx%clang")
     depends_on("hpx@1.9.1:", when="+hpx")
 
     depends_on("kokkos+openmp+serial", when="+kokkos")
-    depends_on("kokkos+sycl", when="%oneapi +kokkos")
+    depends_on("kokkos+sycl", when="+kokkos %oneapi")
 
     # SYCL CUDA/HIP backends require target arch informations to
     # set the correct flags later on:
