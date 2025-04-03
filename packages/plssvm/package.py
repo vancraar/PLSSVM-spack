@@ -361,7 +361,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     depends_on("py-scikit-learn") # TODO: check why needed
     depends_on("py-humanize")  # TODO: check why needed
     depends_on("py-humanize", when="+test_file")
-    depends_on("py-numpy", when="+test_file")
+    depends_on("py-numpy@:1.26.4", when="+test_file") #numpy issues with newer versions in sklearn
 
     depends_on("hip", when="+hip")
     # if not "amdgpu_target=none" in self.variant:
