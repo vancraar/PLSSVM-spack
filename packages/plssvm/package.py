@@ -266,6 +266,7 @@ class Plssvm(CMakePackage,CudaPackage,  ):
     variant("opencl", default=False, description="Enable OpenCL support")
 
     variant("adaptivecpp", default=False, description="Enable AdaptiveCpp SYCL integration")
+    conflicts("+adaptivecppp", when="+lto", description="Adaptivecpp does not work with lto")
     variant("adaptivecpp_SSCP", when="+adaptivecpp", default=True, description="Use AdaptiveCpp's new SSCP compilation flow.")
 
     variant("dpcpp", default=False, description="Enable DPC++ SYCL integration.")
