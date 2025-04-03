@@ -21,7 +21,6 @@
 # ----------------------------------------------------------------------------
 
 from spack.package import *
-from spack.compiler import Compiler
 
 
 class Adaptivecpp(CMakePackage):
